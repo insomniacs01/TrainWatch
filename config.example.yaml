@@ -1,0 +1,46 @@
+server:
+  host: 0.0.0.0
+  port: 8420
+  shared_token: ""
+  poll_seconds: 10
+  sqlite_path: data/train-watch.sqlite3
+  retention_days: 7
+
+nodes:
+  - id: lab-a100
+    transport: ssh
+    label: Lab A100
+    host: 10.0.0.12
+    port: 22
+    user: ubuntu
+    key_path: ~/.ssh/id_ed25519
+    password: ""
+    runs:
+      - id: qwen72b-pretrain
+        label: Qwen 72B Pretrain
+        log_glob: /mnt/train/logs/qwen72b/*/train.log
+        workdir: /mnt/train/qwen72b
+        process_match: torchrun .*train.py
+        parser: auto
+        stall_after_seconds: 900
+        completion_regex: (Training complete|Finished training|saving final checkpoint)
+        error_regex: (Traceback|RuntimeError|CUDA out of memory|NCCL error|AssertionError)
+
+  - id: password-node
+    transport: ssh
+    label: Password Login Node
+    host: 10.0.0.23
+    port: 22
+    user: root
+    key_path: ""
+    password: your-ssh-password
+    runs:
+      - id: ds-run
+        label: DeepSpeed Run
+        log_path: /workspace/logs/deepspeed/train.log
+        workdir: /workspace/project
+        process_match: deepspeed .*train.py
+        parser: deepspeed
+        stall_after_seconds: 600
+        completion_regex: (Training complete|Finished training|saving final checkpoint)
+        error_regex: (Traceback|RuntimeError|CUDA out of memory|NCCL error|AssertionError)

@@ -1,0 +1,17 @@
+{
+  "name": "Train Watch",
+  "short_name": "Train Watch",
+  "description": "SSH-based LLM training monitor for iPhone home screen.",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "start_url": "/",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
+    }
+  ]
+}

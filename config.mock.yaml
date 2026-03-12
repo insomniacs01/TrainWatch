@@ -1,0 +1,52 @@
+server:
+  host: 127.0.0.1
+  port: 8420
+  shared_token: ""
+  poll_seconds: 5
+  sqlite_path: data/train-watch-mock.sqlite3
+  retention_days: 7
+
+nodes:
+  - id: demo-cluster-a
+    label: Demo Cluster A
+    transport: mock
+    mock_profile: release
+    mock_gpu_count: 4
+    runs:
+      - id: qwen72b-pretrain
+        label: Qwen 72B Pretrain
+        parser: deepspeed
+        mock_state: running
+        mock_gpu_index: 0
+      - id: opv2v-stagea
+        label: OPV2V StageA
+        parser: mapanything
+        mock_state: running
+        mock_gpu_index: 1
+      - id: dataset-reindex
+        label: Dataset Reindex
+        parser: generic_torch
+        mock_state: completed
+        mock_gpu_index: 2
+
+  - id: demo-cluster-b
+    label: Demo Cluster B
+    transport: mock
+    mock_profile: release
+    mock_gpu_count: 4
+    runs:
+      - id: llama-sft
+        label: Llama SFT
+        parser: generic_torch
+        mock_state: stalled
+        mock_gpu_index: 0
+      - id: eval-sweep
+        label: Eval Sweep
+        parser: generic_torch
+        mock_state: failed
+        mock_gpu_index: 1
+      - id: checkpoint-merge
+        label: Checkpoint Merge
+        parser: generic_torch
+        mock_state: idle
+        mock_gpu_index: 2

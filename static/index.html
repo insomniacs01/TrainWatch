@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b1020" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Train Watch</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/static/icon.svg" />
+    <link rel="icon" href="/static/icon.svg" />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Train Watch</p>
+          <h1>SSH 训练监控面板</h1>
+          <p class="subtle" id="subtitle">等待第一轮采集...</p>
+        </div>
+        <div class="topbar-actions">
+          <button id="connectBtn" class="secondary-button primary-button">连接 SSH</button>
+          <button id="refreshBtn" class="secondary-button">立即刷新</button>
+          <button id="tokenBtn" class="secondary-button">令牌</button>
+          <button id="alertsBtn" class="secondary-button badge-button">
+            提醒
+            <span id="alertBadge" class="badge hidden">0</span>
+          </button>
+        </div>
+      </header>
+
+      <section id="banner" class="banner hidden"></section>
+
+      <section class="install-card card">
+        <strong>iPhone 主屏幕：</strong>
+        <span>用 Safari 打开后，点“分享 → 添加到主屏幕”。</span>
+      </section>
+
+      <section id="summaryGrid" class="summary-grid"></section>
+
+      <section class="content-grid">
+        <main id="nodeList" class="node-list"></main>
+        <aside class="events-panel card">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Events</p>
+              <h2>Recent Alerts</h2>
+            </div>
+          </div>
+          <div id="eventsList" class="events-list"></div>
+        </aside>
+      </section>
+    </div>
+
+    <aside id="connectDrawer" class="drawer hidden">
+      <div class="drawer-card connect-card">
+        <div class="drawer-header">
+          <div>
+            <p class="eyebrow">Connect</p>
+            <h2>输入 SSH 信息</h2>
+          </div>
+          <button id="closeConnectBtn" class="secondary-button">关闭</button>
+        </div>
+        <form id="connectForm" class="form-grid">
+          <section class="full-span alias-picker card">
+            <div class="alias-picker-header">
+              <div>
+                <strong>从本机 SSH 配置选择</strong>
+                <p class="subtle">自动读取容器或本机里的 <code>~/.ssh/config</code> Host aliases。</p>
+              </div>
+              <button type="button" id="refreshAliasesBtn" class="secondary-button">刷新别名</button>
+            </div>
+            <div class="alias-picker-controls">
+              <select id="aliasSelect">
+                <option value="">选择一个 Host alias（可选）</option>
+              </select>
+              <button type="button" id="applyAliasBtn" class="secondary-button primary-button">填入表单</button>
+            </div>
+            <p id="aliasMeta" class="subtle">还没有加载 SSH aliases。</p>
+          </section>
+          <label>
+            <span>显示名称</span>
+            <input id="labelInput" name="label" placeholder="例如：My 3090 Server" />
+          </label>
+          <label>
+            <span>Host</span>
+            <input id="hostInput" name="host" placeholder="例如：1.2.3.4 或 demo.example.com" required />
+          </label>
+          <label>
+            <span>Port</span>
+            <input id="portInput" name="port" type="number" value="22" />
+          </label>
+          <label>
+            <span>User</span>
+            <input id="userInput" name="user" placeholder="直连主机时填写；SSH alias 可留空" />
+          </label>
+          <label>
+            <span>Password</span>
+            <input id="passwordInput" name="password" type="password" placeholder="可直接输入 SSH 密码" />
+          </label>
+          <label>
+            <span>Key Path</span>
+            <input id="keyPathInput" name="key_path" placeholder="例如：~/.ssh/id_ed25519（可选）" />
+          </label>
+          <label>
+            <span>Run Label</span>
+            <input id="runLabelInput" name="run_label" placeholder="例如：Main Training Run（可选）" />
+          </label>
+          <label>
+            <span>Parser</span>
+            <select id="parserInput" name="parser">
+              <option value="auto">auto</option>
+              <option value="mapanything">mapanything</option>
+              <option value="generic_torch">generic_torch</option>
+              <option value="deepspeed">deepspeed</option>
+            </select>
+          </label>
+          <label class="full-span">
+            <span>Log Path</span>
+            <input id="logPathInput" name="log_path" placeholder="例如：/workspace/run/train.log（可选）" />
+          </label>
+          <label class="full-span">
+            <span>Log Glob</span>
+            <input id="logGlobInput" name="log_glob" placeholder="例如：/workspace/logs/*/train.log（可选）" />
+          </label>
+          <label class="full-span">
+            <span>Process Match</span>
+            <input id="processMatchInput" name="process_match" placeholder="例如：torchrun .*train.py（可选）" />
+          </label>
+          <label>
+            <span>Stall Seconds</span>
+            <input id="stallInput" name="stall_after_seconds" type="number" value="900" />
+          </label>
+          <div class="full-span form-note card">
+            <strong>说明</strong>
+            <p class="subtle">如果你填的是本机 `~/.ssh/config` 里的 Host alias，可以只填 Host，User/Key/Port 走 SSH config；即使不填日志和进程规则，系统也会自动尝试从训练进程、stdout/stderr 和常见输出目录里发现任务并估算时间；填了 `log_path/log_glob` 和 `process_match` 后，识别会更稳定，`loss / ETA / step` 也更完整。</p>
+          </div>
+          <div class="full-span form-actions">
+            <button type="submit" id="submitConnectBtn" class="secondary-button primary-button">连接并开始监控</button>
+          </div>
+        </form>
+      </div>
+    </aside>
+
+    <aside id="detailDrawer" class="drawer hidden">
+      <div class="drawer-card">
+        <div class="drawer-header">
+          <div>
+            <p id="drawerEyebrow" class="eyebrow">详情</p>
+            <h2 id="drawerTitle">训练详情</h2>
+          </div>
+          <button id="closeDrawerBtn" class="secondary-button">关闭</button>
+        </div>
+
+        <div id="drawerMeta" class="drawer-meta"></div>
+
+        <section class="chart-grid">
+          <div class="chart-card card">
+            <h3>Loss</h3>
+            <canvas id="lossChart" width="600" height="180"></canvas>
+          </div>
+          <div class="chart-card card">
+            <h3>GPU 利用率</h3>
+            <canvas id="gpuChart" width="600" height="180"></canvas>
+          </div>
+          <div class="chart-card card">
+            <h3>显存</h3>
+            <canvas id="memChart" width="600" height="180"></canvas>
+          </div>
+          <div class="chart-card card">
+            <h3>温度</h3>
+            <canvas id="tempChart" width="600" height="180"></canvas>
+          </div>
+        </section>
+
+        <section class="detail-grid">
+          <div class="card">
+            <h3>Matched Processes</h3>
+            <div id="drawerProcesses" class="process-list"></div>
+          </div>
+          <div class="card">
+            <h3>Latest Log</h3>
+            <pre id="drawerLog" class="log-tail log-tail-large"></pre>
+          </div>
+        </section>
+      </div>
+    </aside>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

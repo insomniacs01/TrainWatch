@@ -1,0 +1,9 @@
+server:
+  host: 127.0.0.1
+  port: 8420
+  shared_token: ""
+  poll_seconds: 5
+  sqlite_path: data/train-watch-empty.sqlite3
+  retention_days: 7
+
+nodes: []

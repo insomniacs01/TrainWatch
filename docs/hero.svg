@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="Train Watch hero">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1020" />
+      <stop offset="100%" stop-color="#1d4ed8" />
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)" rx="32" />
+  <circle cx="975" cy="120" r="140" fill="#38bdf8" opacity="0.08" />
+  <circle cx="1090" cy="510" r="190" fill="#22c55e" opacity="0.08" />
+  <g fill="#e2e8f0" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">
+    <text x="80" y="140" font-size="28" fill="#38bdf8">Train Watch</text>
+    <text x="80" y="220" font-size="64" font-weight="700">SSH-based LLM training monitor</text>
+    <text x="80" y="280" font-size="30" fill="#cbd5e1">A mobile-first PWA for GPU, loss, ETA and run status.</text>
+  </g>
+  <g transform="translate(80 340)">
+    <rect width="500" height="190" rx="24" fill="#0f1530" stroke="#334155" />
+    <text x="28" y="40" fill="#38bdf8" font-size="20" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Summary</text>
+    <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" fill="#e2e8f0" font-size="16">
+      <rect x="28" y="62" width="130" height="92" rx="16" fill="#111827" stroke="#334155" />
+      <text x="46" y="92" fill="#94a3b8">Running Runs</text>
+      <text x="46" y="132" font-size="34">2</text>
+      <rect x="176" y="62" width="130" height="92" rx="16" fill="#111827" stroke="#334155" />
+      <text x="194" y="92" fill="#94a3b8">Alerting</text>
+      <text x="194" y="132" font-size="34" fill="#f59e0b">1</text>
+      <rect x="324" y="62" width="148" height="92" rx="16" fill="#111827" stroke="#334155" />
+      <text x="342" y="92" fill="#94a3b8">Busy GPUs</text>
+      <text x="342" y="132" font-size="34" fill="#22c55e">6 / 8</text>
+    </g>
+  </g>
+  <g transform="translate(640 120)">
+    <rect width="470" height="390" rx="28" fill="#0f1530" stroke="#334155" />
+    <text x="28" y="42" fill="#e2e8f0" font-size="24" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Demo Cluster A</text>
+    <g font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="16">
+      <rect x="28" y="72" width="414" height="112" rx="18" fill="#111827" stroke="#334155" />
+      <text x="48" y="104" fill="#e2e8f0">OPV2V StageA</text>
+      <text x="48" y="134" fill="#38bdf8">loss 18.29</text>
+      <text x="180" y="134" fill="#22c55e">eta 0:10:29</text>
+      <text x="308" y="134" fill="#f59e0b">step 200 / 409</text>
+      <text x="48" y="164" fill="#94a3b8">Epoch: [4] [200/409] eta: 0:10:29 loss: 18.2936</text>
+      <rect x="28" y="202" width="414" height="140" rx="18" fill="#111827" stroke="#334155" />
+      <path d="M52 310 L116 270 L180 282 L244 230 L308 220 L372 174" fill="none" stroke="#38bdf8" stroke-width="4" />
+      <path d="M52 300 L116 284 L180 264 L244 242 L308 218 L372 196" fill="none" stroke="#22c55e" stroke-width="4" opacity="0.8" />
+      <text x="48" y="236" fill="#94a3b8">Loss / GPU util trend</text>
+    </g>
+  </g>
+</svg>

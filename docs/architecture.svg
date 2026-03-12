@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" role="img" aria-label="Train Watch architecture">
+  <rect width="1200" height="340" fill="#0b1020" rx="24" />
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">
+    <rect x="60" y="70" width="250" height="200" rx="24" fill="#0f1530" stroke="#334155" />
+    <text x="90" y="118" fill="#38bdf8" font-size="22">Linux GPU servers</text>
+    <text x="90" y="158" fill="#e2e8f0" font-size="18">- nvidia-smi</text>
+    <text x="90" y="188" fill="#e2e8f0" font-size="18">- ps / process match</text>
+    <text x="90" y="218" fill="#e2e8f0" font-size="18">- train.log / glob</text>
+    <text x="90" y="248" fill="#94a3b8" font-size="16">Zero-intrusion SSH polling</text>
+
+    <rect x="470" y="40" width="280" height="260" rx="24" fill="#0f1530" stroke="#334155" />
+    <text x="500" y="88" fill="#38bdf8" font-size="22">Train Watch backend</text>
+    <text x="500" y="128" fill="#e2e8f0" font-size="18">FastAPI + Paramiko</text>
+    <text x="500" y="158" fill="#e2e8f0" font-size="18">Parser + status machine</text>
+    <text x="500" y="188" fill="#e2e8f0" font-size="18">SQLite history storage</text>
+    <text x="500" y="218" fill="#e2e8f0" font-size="18">HTTP + WebSocket stream</text>
+    <text x="500" y="248" fill="#94a3b8" font-size="16">Also supports local mock mode</text>
+
+    <rect x="910" y="70" width="230" height="200" rx="24" fill="#0f1530" stroke="#334155" />
+    <text x="940" y="118" fill="#38bdf8" font-size="22">PWA frontend</text>
+    <text x="940" y="158" fill="#e2e8f0" font-size="18">iPhone home screen</text>
+    <text x="940" y="188" fill="#e2e8f0" font-size="18">Summary + charts</text>
+    <text x="940" y="218" fill="#e2e8f0" font-size="18">In-app alerts</text>
+    <text x="940" y="248" fill="#94a3b8" font-size="16">No build step</text>
+
+    <path d="M310 170 L460 170" stroke="#38bdf8" stroke-width="6" stroke-linecap="round" />
+    <path d="M750 170 L900 170" stroke="#38bdf8" stroke-width="6" stroke-linecap="round" />
+    <polygon points="452,160 452,180 470,170" fill="#38bdf8" />
+    <polygon points="892,160 892,180 910,170" fill="#38bdf8" />
+  </g>
+</svg>
