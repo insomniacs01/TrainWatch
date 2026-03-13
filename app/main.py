@@ -1,49 +1,23 @@
+import asyncio
 import os
-import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
-from uuid import uuid4
+from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
 
-from .config import AppConfig, NodeConfig, RunConfig, load_config
+from .api_inputs import QueueJobInput, SSHConnectionInput, build_node_from_input, build_queue_job_from_input
+from .config import load_config
 from .runtime import TrainWatchRuntime
-from .ssh_support import ssh_config_alias_exists, ssh_config_alias_records
+from .ssh_support import ssh_config_alias_records
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
-
-
-class RunConnectionInput(BaseModel):
-    label: str = "Main Run"
-    log_path: Optional[str] = None
-    log_glob: Optional[str] = None
-    process_match: str = ""
-    parser: str = "auto"
-    stall_after_seconds: int = 900
-    completion_regex: str = r"(Training complete|Finished training|saving final checkpoint)"
-    error_regex: str = r"(Traceback|RuntimeError|CUDA out of memory|NCCL error|AssertionError)"
-
-
-class SSHConnectionInput(BaseModel):
-    label: Optional[str] = None
-    host: str
-    port: int = 22
-    user: Optional[str] = ""
-    password: Optional[str] = None
-    key_path: Optional[str] = None
-    runs: List[RunConnectionInput] = Field(default_factory=list)
-
-
-def _slugify(value: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
-    return slug or "node"
+WEBSOCKET_AUTH_TIMEOUT_SECONDS = 10
 
 
 def _parse_timestamp(value: Optional[str], default_delta_hours: Optional[int] = None) -> str:
@@ -72,50 +46,22 @@ def require_token(request: Request) -> None:
     _check_token(expected, actual)
 
 
-def _build_node_from_input(payload: SSHConnectionInput) -> NodeConfig:
-    password = (payload.password or "").strip()
-    key_path = str(Path(payload.key_path).expanduser()) if payload.key_path else ""
-    host = payload.host.strip()
-    user = (payload.user or "").strip()
-    if not host:
-        raise HTTPException(status_code=400, detail="host is required")
-    if not user and not ssh_config_alias_exists(host):
-        raise HTTPException(status_code=400, detail="user is required unless host is a local SSH config alias")
+async def _authenticate_websocket(websocket: WebSocket, expected_token: str) -> bool:
+    try:
+        payload = await asyncio.wait_for(websocket.receive_json(), timeout=WEBSOCKET_AUTH_TIMEOUT_SECONDS)
+    except Exception:
+        await websocket.close(code=4401)
+        return False
 
-    label = (payload.label or host).strip() or host
-    node_id = f"{_slugify(label)}-{uuid4().hex[:8]}"
-    runs = []
-    for index, run in enumerate(payload.runs):
-        if not run.log_path and not run.log_glob and not run.process_match:
-            continue
-        if not run.log_path and not run.log_glob:
-            raise HTTPException(status_code=400, detail="run.log_path or run.log_glob is required when adding a run")
-        run_label = (run.label or f"Run {index + 1}").strip() or f"Run {index + 1}"
-        runs.append(
-            RunConfig(
-                id=f"{_slugify(run_label)}-{uuid4().hex[:8]}",
-                label=run_label,
-                log_path=run.log_path,
-                log_glob=run.log_glob,
-                process_match=run.process_match,
-                parser=run.parser,
-                stall_after_seconds=max(30, run.stall_after_seconds),
-                completion_regex=run.completion_regex,
-                error_regex=run.error_regex,
-            )
-        )
+    if not isinstance(payload, dict) or payload.get("type") != "auth":
+        await websocket.close(code=4401)
+        return False
 
-    return NodeConfig(
-        id=node_id,
-        label=label,
-        host=host,
-        port=max(1, payload.port),
-        user=user,
-        key_path=key_path,
-        password=password,
-        runs=runs,
-        transport="ssh",
-    )
+    actual_token = str(payload.get("token", ""))
+    if expected_token and actual_token != expected_token:
+        await websocket.close(code=4401)
+        return False
+    return True
 
 
 def create_app(runtime: TrainWatchRuntime) -> FastAPI:
@@ -192,9 +138,34 @@ def create_app(runtime: TrainWatchRuntime) -> FastAPI:
     async def list_connections() -> dict:
         return {"items": runtime.connection_summaries()}
 
+    @app.get("/api/v1/jobs", dependencies=[Depends(require_token)])
+    async def list_jobs(node_id: Optional[str] = None) -> dict:
+        return runtime.job_summaries(node_id=node_id)
+
+    @app.post("/api/v1/jobs", dependencies=[Depends(require_token)])
+    async def add_job(payload: QueueJobInput) -> dict:
+        job = build_queue_job_from_input(payload, runtime.find_node)
+        try:
+            item = await runtime.enqueue_job(job)
+        except ValueError as exc:
+            detail = str(exc)
+            status_code = 404 if "not found" in detail.lower() else 400
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+        return {"item": item}
+
+    @app.delete("/api/v1/jobs/{job_id}", dependencies=[Depends(require_token)])
+    async def cancel_job(job_id: str) -> dict:
+        try:
+            item = await runtime.cancel_job(job_id)
+        except ValueError as exc:
+            detail = str(exc)
+            status_code = 404 if "not found" in detail.lower() else 409
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+        return {"item": item}
+
     @app.post("/api/v1/connections", dependencies=[Depends(require_token)])
     async def add_connection(payload: SSHConnectionInput) -> dict:
-        node = _build_node_from_input(payload)
+        node = build_node_from_input(payload)
         try:
             item = await runtime.add_node(node)
         except ValueError as exc:
@@ -211,11 +182,11 @@ def create_app(runtime: TrainWatchRuntime) -> FastAPI:
     @app.websocket("/api/v1/stream")
     async def stream(websocket: WebSocket) -> None:
         expected = runtime.config.server.shared_token
-        token = websocket.query_params.get("token", "")
-        if expected and token != expected:
-            await websocket.close(code=4401)
+        await websocket.accept()
+        if not await _authenticate_websocket(websocket, expected):
             return
-        await runtime.hub.connect(websocket)
+
+        await runtime.hub.connect(websocket, already_accepted=True)
         await websocket.send_json({"type": "snapshot", "snapshot": runtime.snapshot_dict(), "events": []})
         try:
             while True:

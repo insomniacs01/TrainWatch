@@ -5,6 +5,7 @@ server:
   poll_seconds: 10
   sqlite_path: data/train-watch.sqlite3
   retention_days: 7
+  persist_passwords: false
 
 nodes:
   - id: lab-a100

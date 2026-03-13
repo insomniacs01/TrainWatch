@@ -11,6 +11,7 @@ class GPUProcess:
     used_gpu_memory_mb: Optional[float]
     command: str = ""
     elapsed_seconds: Optional[int] = None
+    cwd: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -63,10 +64,30 @@ class RunSnapshot:
     elapsed_seconds: Optional[int] = None
     remaining_seconds: Optional[int] = None
     estimated_end_at: str = ""
+    gpu_indices: List[int] = field(default_factory=list)
+    gpu_memory_used_mb: Optional[float] = None
     progress_percent: Optional[float] = None
     completion_matched: bool = False
     error_matched: bool = False
     matched_processes: List[Dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ExternalQueueItem:
+    id: str
+    owner: str
+    label: str
+    status: str
+    source: str
+    raw_status: str = ""
+    submitted_at: str = ""
+    gpu_count: Optional[int] = None
+    command: str = ""
+    workdir: str = ""
+    reason: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -86,6 +107,9 @@ class NodeSnapshot:
     gpus: List[GPUInfo] = field(default_factory=list)
     gpu_processes: List[GPUProcess] = field(default_factory=list)
     runs: List[RunSnapshot] = field(default_factory=list)
+    external_queue: List[ExternalQueueItem] = field(default_factory=list)
+    external_queue_source: str = ""
+    external_queue_error: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -112,6 +136,35 @@ class AppSnapshot:
     generated_at: str
     summary: Dict[str, Any]
     nodes: List[NodeSnapshot] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class QueueJob:
+    id: str
+    node_id: str
+    node_label: str
+    owner: str
+    label: str
+    command: str
+    gpu_count: int
+    created_at: str
+    updated_at: str
+    workdir: str = ""
+    parser: str = "auto"
+    status: str = "queued"
+    run_status: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    allocated_gpu_indices: List[int] = field(default_factory=list)
+    log_path: str = ""
+    script_path: str = ""
+    process_match: str = ""
+    run_id: str = ""
+    remote_pid: Optional[int] = None
+    error: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

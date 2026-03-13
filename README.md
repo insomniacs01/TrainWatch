@@ -14,10 +14,14 @@ This repository currently includes two tracks:
 ## Features
 
 - SSH-based monitoring with password auth, key auth, local SSH aliases, and jump-host friendly workflows
+- UI-added SSH connections survive restart via SQLite persistence, with password persistence opt-in
 - Real metrics for CPU, RAM, disk, GPU utilization, VRAM, temperature, power, and GPU processes
+- GPU/task correlation so each running task shows which GPU(s) it currently occupies
 - Training-aware parsing for `loss`, `eval_loss`, `lr`, `grad_norm`, `step`, `step_total`, and `ETA`
 - Run lifecycle detection for `idle`, `running`, `stalled`, `completed`, `failed`, and `unknown`
 - Auto-discovery of training processes and likely log files when explicit log paths are not provided
+- Shared-GPU FIFO queue with per-job GPU count, prepared commands, and automatic launch on resource release
+- External queue visibility via auto-detected Slurm or a custom queue probe command
 - Mobile-first PWA UI that can be added to the iPhone home screen
 
 ## Screenshots
@@ -89,6 +93,7 @@ In the web UI:
 - `User`: SSH username
 - `Password`: SSH password, or
 - `Key Path`: private key path such as `~/.ssh/id_ed25519`
+- `External Queue Probe Command`: optional; leave empty to auto-try `squeue`, or provide your own command that prints JSON queue items
 
 ## What Train Watch Monitors
 
@@ -96,6 +101,7 @@ In the web UI:
 - CPU, memory, and disk usage
 - GPU utilization, memory, temperature, power, and GPU processes
 - training log signals such as `loss`, `ETA`, `step`, and progress
+- external scheduler / queue items when the host exposes them through `squeue` or a custom probe
 - current task name, elapsed time, remaining time, and estimated finish time
 
 ## How Auto-Discovery Works
@@ -119,6 +125,58 @@ Train Watch is near-realtime rather than millisecond streaming.
 - updates are pushed to the frontend over WebSocket after each poll
 
 A `5s` poll interval is usually responsive enough for training monitoring.
+
+## Shared GPU Queue
+
+Train Watch now also supports a lightweight FIFO queue for small teams sharing the same GPU box.
+
+- choose an already connected SSH node
+- enter the launch command and optional workdir
+- request how many GPUs the job needs
+- join the queue and let the scheduler wait for enough free GPUs
+- once earlier queued jobs finish and enough GPUs are free, Train Watch launches the next job automatically
+
+Current queue behavior is intentionally simple:
+
+- FIFO is strict per node
+- later small jobs do not skip an earlier larger job
+- queued jobs can be canceled before launch
+- running jobs are still monitored through the normal monitoring view after launch
+
+## External Queue Visibility
+
+Train Watch can now show queue items that were not submitted through Train Watch itself, but only when the remote machine exposes a queue source.
+
+Current support:
+
+- auto-detect `Slurm` via `squeue`
+- optional per-connection custom probe command that prints JSON
+
+Custom probe command contract:
+
+```json
+{
+  "source": "lab-queue",
+  "items": [
+    {
+      "id": "job-123",
+      "owner": "alice",
+      "label": "llama-sft",
+      "status": "queued",
+      "submitted_at": "2026-03-13T09:58:00Z",
+      "gpu_count": 2,
+      "command": "bash train.sh",
+      "workdir": "/workspace/project",
+      "reason": "waiting for free GPUs"
+    }
+  ]
+}
+```
+
+Important limitation:
+
+- on a plain shared Linux box with no central scheduler and no custom queue script, Train Watch cannot magically know every waiting task outside this app
+- it can only show external queue items when the server already has a queryable queue source
 
 ## iPhone Usage
 
@@ -146,6 +204,9 @@ That creates an app-like icon on iPhone, while `v1` still remains a PWA rather t
 - `GET /api/v1/connections`
 - `POST /api/v1/connections`
 - `DELETE /api/v1/connections/{node_id}`
+- `GET /api/v1/jobs`
+- `POST /api/v1/jobs`
+- `DELETE /api/v1/jobs/{job_id}`
 - `WS /api/v1/stream`
 
 ## Tests
@@ -159,8 +220,11 @@ python -m unittest discover -s tests -p 'test_*.py'
 Train Watch is currently designed for single-user, self-hosted usage.
 
 - set `server.shared_token` before exposing it to broader networks
-- frontend tokens are stored in browser local storage
-- SSH passwords entered in the UI are kept only in the running process memory
+- frontend tokens are kept in browser session storage
+- WebSocket authentication is sent as an initial auth message instead of a URL query parameter
+- UI-added SSH connections are persisted in SQLite so they survive restart; by default, SSH passwords stay in memory and are not written to SQLite
+- set `server.persist_passwords: true` only if you explicitly want password-based UI connections to survive restart
+- queue submitter names are plain text labels rather than a real auth system
 - avoid committing real hostnames, usernames, ports, private paths, or secrets into the repository
 
 ## Roadmap
@@ -172,6 +236,7 @@ Train Watch is currently designed for single-user, self-hosted usage.
 - [x] Training task auto-discovery
 - [x] Loss / ETA / progress / estimated finish time
 - [x] Mobile-first PWA
+- [x] Shared GPU FIFO queue and auto launch
 - [ ] Native iPhone direct-SSH app in `train-watch-v2/`
 
 ## License

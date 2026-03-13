@@ -5,6 +5,7 @@ server:
   poll_seconds: 5
   sqlite_path: data/train-watch-mock.sqlite3
   retention_days: 7
+  persist_passwords: false
 
 nodes:
   - id: demo-cluster-a

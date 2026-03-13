@@ -127,10 +127,54 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(node.runs[0].started_at, "2026-03-11T09:55:00Z")
         self.assertEqual(node.runs[0].remaining_seconds, 662)
         self.assertEqual(node.runs[0].estimated_end_at, "2026-03-11T10:11:02Z")
+        self.assertEqual(node.runs[0].gpu_indices, [0])
+        self.assertAlmostEqual(node.runs[0].gpu_memory_used_mb, 69000.0, places=1)
         self.assertAlmostEqual(node.runs[0].progress_percent, 44.0, places=1)
         self.assertAlmostEqual(node.metrics["cpu_usage_percent"], 63.5, places=1)
         self.assertAlmostEqual(node.metrics["memory_used_percent"], 50.0, places=1)
         self.assertAlmostEqual(node.metrics["disk_used_percent"], 50.0, places=1)
+
+    def test_collect_node_includes_external_queue_items(self) -> None:
+        payload = {
+            "hostname": "trainer-a",
+            "collected_at": "2026-03-13T10:00:00Z",
+            "loadavg": [0.2, 0.3, 0.4],
+            "cpu": {"usage_percent": 12.0, "cores_logical": 8},
+            "memory": {"total_mb": 1024.0, "used_mb": 512.0, "available_mb": 512.0, "used_percent": 50.0},
+            "disk": {"path": "/", "total_gb": 100.0, "used_gb": 25.0, "free_gb": 75.0, "used_percent": 25.0},
+            "nvidia_smi": True,
+            "gpu_error": "",
+            "gpus": [],
+            "gpu_processes": [],
+            "runs": [],
+            "external_queue": {
+                "source": "slurm",
+                "error": "",
+                "items": [
+                    {
+                        "id": "12345",
+                        "owner": "alice",
+                        "label": "llama-sft",
+                        "status": "queued",
+                        "raw_status": "PENDING",
+                        "submitted_at": "2026-03-13T09:58:00Z",
+                        "command": "sbatch train.sh",
+                        "reason": "Resources",
+                    }
+                ],
+            },
+        }
+        collector = Collector(self.config, pool=FakePool(payload))
+        node = collector.collect_node(self.config.nodes[0])
+        self.assertEqual(node.external_queue_source, "slurm")
+        self.assertEqual(node.external_queue_error, "")
+        self.assertEqual(len(node.external_queue), 1)
+        item = node.external_queue[0]
+        self.assertEqual(item.id, "12345")
+        self.assertEqual(item.owner, "alice")
+        self.assertEqual(item.status, "queued")
+        self.assertEqual(item.raw_status, "PENDING")
+        self.assertEqual(item.reason, "Resources")
 
     def test_paramiko_pool_supports_password_auth(self) -> None:
         node = NodeConfig(
@@ -144,7 +188,7 @@ class CollectorTests(unittest.TestCase):
             runs=[],
         )
         fake_client = RecordingSSHClient()
-        with patch("app.collector.paramiko.SSHClient", return_value=fake_client):
+        with patch("app.ssh_pool.paramiko.SSHClient", return_value=fake_client):
             client = ParamikoConnectionPool()._connect(node)
 
         self.assertIs(client, fake_client)
@@ -175,6 +219,24 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(node.status, "online")
         self.assertEqual(node.error, "")
         self.assertAlmostEqual(node.metrics["cpu_usage_percent"], 8.0, places=1)
+
+    def test_missing_persisted_password_returns_clear_offline_error(self) -> None:
+        node = NodeConfig(
+            id="node-missing-password",
+            label="Password Node",
+            host="gpu.example.com",
+            port=22,
+            user="ubuntu",
+            key_path="",
+            password="",
+            runs=[RunConfig(id="run-1", label="Run 1", log_path="/tmp/train.log")],
+            needs_password=True,
+        )
+        collector = Collector(self.config, pool=FakePool({}))
+        snapshot = collector.collect_node(node)
+        self.assertEqual(snapshot.status, "offline")
+        self.assertIn("password was not persisted", snapshot.error)
+        self.assertEqual(snapshot.runs[0].status, "unknown")
 
     def test_remaining_seconds_can_be_estimated_from_progress(self) -> None:
         payload = {
@@ -212,6 +274,88 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(run.started_at, "2026-03-11T09:50:00Z")
         self.assertEqual(run.estimated_end_at, "2026-03-11T10:10:00Z")
         self.assertAlmostEqual(run.progress_percent, 50.0, places=1)
+
+    def test_collect_node_maps_launcher_run_to_worker_gpu_indices(self) -> None:
+        payload = {
+            "hostname": "trainer-a",
+            "collected_at": "2026-03-11T10:00:00Z",
+            "loadavg": [1.1, 1.2, 1.3],
+            "cpu": {"usage_percent": 55.0, "cores_logical": 32},
+            "memory": {"total_mb": 65536.0, "used_mb": 32768.0, "available_mb": 32768.0, "used_percent": 50.0},
+            "disk": {"path": "/", "total_gb": 1000.0, "used_gb": 400.0, "free_gb": 600.0, "used_percent": 40.0},
+            "nvidia_smi": True,
+            "gpu_error": "",
+            "gpus": [
+                {
+                    "index": 0,
+                    "uuid": "GPU-0",
+                    "name": "NVIDIA A100",
+                    "utilization_gpu": 92.0,
+                    "memory_used_mb": 35000.0,
+                    "memory_total_mb": 81920.0,
+                    "temperature_c": 70.0,
+                    "power_draw_w": 250.0,
+                    "power_limit_w": 300.0,
+                },
+                {
+                    "index": 1,
+                    "uuid": "GPU-1",
+                    "name": "NVIDIA A100",
+                    "utilization_gpu": 88.0,
+                    "memory_used_mb": 34000.0,
+                    "memory_total_mb": 81920.0,
+                    "temperature_c": 69.0,
+                    "power_draw_w": 248.0,
+                    "power_limit_w": 300.0,
+                },
+            ],
+            "gpu_processes": [
+                {
+                    "gpu_uuid": "GPU-0",
+                    "pid": 2234,
+                    "process_name": "python",
+                    "used_gpu_memory_mb": 35000.0,
+                    "command": "python -u train.py --config conf.yaml --local_rank=0",
+                    "elapsed_seconds": 298,
+                    "cwd": "/workspace/demo",
+                },
+                {
+                    "gpu_uuid": "GPU-1",
+                    "pid": 2235,
+                    "process_name": "python",
+                    "used_gpu_memory_mb": 34000.0,
+                    "command": "python -u train.py --config conf.yaml --local_rank=1",
+                    "elapsed_seconds": 297,
+                    "cwd": "/workspace/demo",
+                },
+            ],
+            "runs": [
+                {
+                    "id": "run-1",
+                    "label": "Run 1",
+                    "log_path": "/tmp/train.log",
+                    "log_exists": True,
+                    "last_update_at": "2026-03-11T09:59:58Z",
+                    "log_age_seconds": 2,
+                    "log_error": "",
+                    "tail": "Epoch: [2]  [50/100]  eta: 0:10:00  lr: 0.000020  loss: 1.0000  grad_norm: 0.50",
+                    "matched_processes": [
+                        {
+                            "pid": 1234,
+                            "elapsed_seconds": 300,
+                            "command": "torchrun --nproc_per_node=2 train.py --config conf.yaml",
+                            "cwd": "/workspace/demo",
+                        }
+                    ],
+                }
+            ],
+        }
+        collector = Collector(self.config, pool=FakePool(payload))
+        node = collector.collect_node(self.config.nodes[0])
+        run = node.runs[0]
+        self.assertEqual(run.status, "running")
+        self.assertEqual(run.gpu_indices, [0, 1])
+        self.assertAlmostEqual(run.gpu_memory_used_mb, 69000.0, places=1)
 
     def test_auto_discovered_runs_work_without_configured_logs(self) -> None:
         config = AppConfig(

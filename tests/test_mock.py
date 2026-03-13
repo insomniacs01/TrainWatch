@@ -48,6 +48,7 @@ class MockTests(unittest.TestCase):
             self.assertEqual(node.runs[0].status, "running")
             self.assertEqual(node.runs[1].status, "stalled")
             self.assertTrue(node.runs[0].matched_processes)
+            self.assertTrue(node.runs[0].gpu_indices)
 
 
 if __name__ == "__main__":

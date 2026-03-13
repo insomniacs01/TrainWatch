@@ -79,6 +79,7 @@ h1, h2, h3, p, pre { margin: 0; }
   margin-top: 18px;
 }
 .node-list { display: grid; gap: 16px; }
+.side-panel-stack { display: grid; gap: 16px; }
 .events-panel { position: sticky; top: 16px; }
 .events-list { display: grid; gap: 10px; margin-top: 12px; }
 .event-item { padding: 12px; background: rgba(255,255,255,0.02); border-radius: 14px; border: 1px solid rgba(148,163,184,0.08); }
@@ -110,16 +111,21 @@ h1, h2, h3, p, pre { margin: 0; }
   border-color: rgba(56, 189, 248, 0.35);
 }
 
-.status-connecting { color: var(--blue); }
+.status-connecting, .status-starting { color: var(--blue); }
+.status-queued { color: #a78bfa; }
 .status-online, .status-running, .status-completed { color: var(--green); }
 .status-degraded, .status-stalled, .status-idle { color: var(--yellow); }
-.status-offline, .status-failed, .status-unknown { color: var(--red); }
+.status-offline, .status-failed, .status-unknown, .status-canceled { color: var(--red); }
 
 .run-card { cursor: pointer; }
 .run-card:hover { border-color: rgba(56, 189, 248, 0.45); }
 .task-line { margin-top: 10px; display: grid; gap: 6px; }
 .task-line code { color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
 .note-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.gpu-occupancy-list { display: grid; gap: 10px; margin-top: 12px; }
+.gpu-occupancy-item { padding: 12px; border-radius: 12px; background: rgba(255,255,255,0.02); border: 1px solid rgba(148,163,184,0.08); }
+.gpu-occupancy-task { margin-top: 8px; word-break: break-word; }
+.gpu-occupancy-empty { margin-top: 12px; }
 
 .log-tail {
   margin-top: 12px;
@@ -170,7 +176,10 @@ canvas { width: 100%; height: 180px; }
 }
 .form-grid span { color: var(--muted); font-size: 13px; }
 .form-grid input,
-.form-grid select {
+.form-grid select,
+.job-form-grid input,
+.job-form-grid select,
+.job-form-grid textarea {
   width: 100%;
   border-radius: 12px;
   border: 1px solid var(--line);
@@ -180,7 +189,15 @@ canvas { width: 100%; height: 180px; }
   outline: none;
 }
 .form-grid input:focus,
-.form-grid select:focus { border-color: rgba(56, 189, 248, 0.45); }
+.form-grid select:focus,
+.job-form-grid input:focus,
+.job-form-grid select:focus,
+.job-form-grid textarea:focus { border-color: rgba(56, 189, 248, 0.45); }
+.job-form-grid textarea {
+  min-height: 112px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 .full-span { grid-column: 1 / -1; }
 .form-note { padding: 14px; }
 .form-actions { justify-content: flex-end; }
@@ -189,6 +206,36 @@ canvas { width: 100%; height: 180px; }
 .alias-picker-controls { margin-top: 12px; }
 .alias-picker-controls select { flex: 1; }
 .alias-picker code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.job-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.job-form-grid label {
+  display: grid;
+  gap: 8px;
+}
+.job-form-grid span { color: var(--muted); font-size: 13px; }
+.job-summary { margin-top: 14px; }
+.job-list { display: grid; gap: 12px; margin-top: 14px; }
+.job-item {
+  padding: 14px;
+  background: rgba(255,255,255,0.02);
+  border-radius: 14px;
+  border: 1px solid rgba(148,163,184,0.08);
+}
+.job-item code {
+  display: block;
+  margin-top: 10px;
+  color: #cbd5e1;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.jobs-panel { position: sticky; top: 16px; }
+.job-meta { display: grid; gap: 8px; margin-top: 10px; }
+.job-actions { display: flex; gap: 8px; margin-top: 12px; }
 
 .badge-button { position: relative; }
 .badge {
@@ -207,13 +254,17 @@ canvas { width: 100%; height: 180px; }
 
 @media (max-width: 960px) {
   .content-grid { grid-template-columns: 1fr; }
-  .events-panel { position: static; }
+  .events-panel, .jobs-panel { position: static; }
 }
 @media (max-width: 720px) {
   .topbar, .drawer-header, .alias-picker-header, .alias-picker-controls { flex-direction: column; align-items: flex-start; }
   .topbar-actions { width: 100%; }
   .secondary-button { flex: 1; }
-  .form-grid { grid-template-columns: 1fr; }
+  .form-grid, .job-form-grid { grid-template-columns: 1fr; }
   .alias-picker-controls { width: 100%; }
   .alias-picker-controls select { width: 100%; }
 }
+
+.panel-subheader { margin-top: 18px; padding-top: 18px; border-top: 1px solid rgba(148,163,184,0.08); }
+.external-source-note { margin-top: 10px; }
+.job-item .subtle code { font-size: 12px; }

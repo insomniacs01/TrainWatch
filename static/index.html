@@ -42,15 +42,73 @@
 
       <section class="content-grid">
         <main id="nodeList" class="node-list"></main>
-        <aside class="events-panel card">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Events</p>
-              <h2>Recent Alerts</h2>
+        <div class="side-panel-stack">
+          <section class="jobs-panel card">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Queue</p>
+                <h2>GPU 排队任务</h2>
+              </div>
             </div>
-          </div>
-          <div id="eventsList" class="events-list"></div>
-        </aside>
+            <form id="jobForm" class="job-form-grid">
+              <label>
+                <span>目标连接</span>
+                <select id="jobNodeSelect" name="node_id"></select>
+              </label>
+              <label>
+                <span>申请 GPU 数</span>
+                <input id="jobGpuCountInput" name="gpu_count" type="number" min="1" value="1" />
+              </label>
+              <label>
+                <span>提交人</span>
+                <input id="jobOwnerInput" name="owner" placeholder="例如：alice" />
+              </label>
+              <label>
+                <span>任务名</span>
+                <input id="jobLabelInput" name="label" placeholder="例如：Llama SFT" />
+              </label>
+              <label class="full-span">
+                <span>工作目录</span>
+                <input id="jobWorkdirInput" name="workdir" placeholder="例如：/workspace/project（可选）" />
+              </label>
+              <label>
+                <span>Parser</span>
+                <select id="jobParserInput" name="parser">
+                  <option value="auto">auto</option>
+                  <option value="mapanything">mapanything</option>
+                  <option value="generic_torch">generic_torch</option>
+                  <option value="deepspeed">deepspeed</option>
+                </select>
+              </label>
+              <label class="full-span">
+                <span>启动命令</span>
+                <textarea id="jobCommandInput" name="command" rows="5" placeholder="例如：torchrun --nproc_per_node=2 train.py --config conf.yaml" required></textarea>
+              </label>
+              <div class="full-span form-actions">
+                <button type="submit" id="submitJobBtn" class="secondary-button primary-button">加入排队</button>
+              </div>
+            </form>
+            <div id="jobSummary" class="note-row job-summary"></div>
+            <div id="jobList" class="job-list"></div>
+            <div class="panel-subheader">
+              <div>
+                <p class="eyebrow">External</p>
+                <h3>外部排队 / 调度任务</h3>
+              </div>
+            </div>
+            <div id="externalJobSummary" class="note-row job-summary"></div>
+            <div id="externalJobList" class="job-list"></div>
+          </section>
+          <aside class="events-panel card">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Events</p>
+                <h2>Recent Alerts</h2>
+              </div>
+            </div>
+            <div id="eventsList" class="events-list"></div>
+          </aside>
+        </div>
       </section>
     </div>
 
@@ -104,6 +162,10 @@
             <span>Key Path</span>
             <input id="keyPathInput" name="key_path" placeholder="例如：~/.ssh/id_ed25519（可选）" />
           </label>
+          <label class="full-span">
+            <span>外部队列探针命令</span>
+            <input id="queueProbeInput" name="queue_probe_command" placeholder="可选：留空时自动尝试 squeue；也可填自定义命令输出 JSON" />
+          </label>
           <label>
             <span>Run Label</span>
             <input id="runLabelInput" name="run_label" placeholder="例如：Main Training Run（可选）" />
@@ -135,7 +197,7 @@
           </label>
           <div class="full-span form-note card">
             <strong>说明</strong>
-            <p class="subtle">如果你填的是本机 `~/.ssh/config` 里的 Host alias，可以只填 Host，User/Key/Port 走 SSH config；即使不填日志和进程规则，系统也会自动尝试从训练进程、stdout/stderr 和常见输出目录里发现任务并估算时间；填了 `log_path/log_glob` 和 `process_match` 后，识别会更稳定，`loss / ETA / step` 也更完整。</p>
+            <p class="subtle">如果你填的是本机 `~/.ssh/config` 里的 Host alias，可以只填 Host，User/Key/Port 走 SSH config；即使不填日志和进程规则，系统也会自动尝试从训练进程、stdout/stderr 和常见输出目录里发现任务并估算时间；填了 `log_path/log_glob` 和 `process_match` 后，识别会更稳定，`loss / ETA / step` 也更完整。外部排队默认会自动尝试 `squeue`；如果你们实验室有自己的排队脚本，也可以填一个返回 JSON 的自定义探针命令。</p>
           </div>
           <div class="full-span form-actions">
             <button type="submit" id="submitConnectBtn" class="secondary-button primary-button">连接并开始监控</button>
@@ -188,6 +250,6 @@
       </div>
     </aside>
 
-    <script src="/static/app.js" defer></script>
+    <script type="module" src="/static/app.js"></script>
   </body>
 </html>

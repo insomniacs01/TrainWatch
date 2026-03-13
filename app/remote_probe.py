@@ -1,0 +1,689 @@
+REMOTE_SCRIPT = r'''
+import base64
+import glob
+import json
+import os
+import re
+import shlex
+import shutil
+import socket
+import subprocess
+import time
+
+cfg = json.loads(base64.b64decode("__PAYLOAD__").decode("utf-8"))
+
+TRAIN_LAUNCH_RE = re.compile(r"\b(torchrun|deepspeed)\b|\baccelerate\s+launch\b", flags=re.IGNORECASE)
+NON_TRAIN_HINT_RE = re.compile(r"\b(jupyter|tensorboard|gradio|streamlit|ray|serve|server|inference|infer|vllm)\b", flags=re.IGNORECASE)
+
+
+def run_command(command):
+    proc = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return proc.stdout, proc.stderr, proc.returncode
+
+
+def tail_file(path, line_limit=1200, byte_limit=1048576):
+    with open(path, "rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - byte_limit))
+        data = handle.read().decode("utf-8", "replace")
+    return "\n".join(data.splitlines()[-line_limit:])
+
+
+def resolve_path(run_cfg):
+    path = run_cfg.get("log_path")
+    if path:
+        return os.path.expanduser(path)
+    candidates = glob.glob(os.path.expanduser(run_cfg.get("log_glob", "")))
+    if not candidates:
+        return ""
+    candidates = [candidate for candidate in candidates if os.path.isfile(candidate)]
+    if not candidates:
+        return ""
+    return max(candidates, key=lambda item: os.path.getmtime(item))
+
+
+def safe_split(command):
+    try:
+        return shlex.split(command)
+    except Exception:
+        return command.split()
+
+
+def command_priority(command):
+    if re.search(r"\b(torchrun|deepspeed)\b", command):
+        return 0
+    if re.search(r"\baccelerate\s+launch\b", command):
+        return 1
+    if re.search(r"\bpython(?:\d+(?:\.\d+)*)?\b", command):
+        return 2
+    return 3
+
+
+def basename(token):
+    return token.rstrip("/").rsplit("/", 1)[-1]
+
+
+def summarize_command(command):
+    if not command.strip():
+        return ""
+    parts = safe_split(command)
+    if not parts:
+        return command.strip()
+    launcher = basename(parts[0])
+    search_parts = parts[1:]
+    if launcher == "accelerate" and len(parts) > 1 and parts[1] == "launch":
+        launcher = "accelerate launch"
+        search_parts = parts[2:]
+    if launcher.startswith("python") or launcher in {"torchrun", "deepspeed", "accelerate launch", "bash", "sh"}:
+        script = next((item for item in search_parts if item.endswith((".py", ".sh"))), "")
+        if not script:
+            script = next((item for item in search_parts if not item.startswith("-") and "=" not in item), "")
+        if script:
+            return f"{launcher} {basename(script)}"
+    return basename(parts[0])
+
+
+def command_signature(command):
+    parts = safe_split(command)
+    if not parts:
+        return ""
+    launcher = basename(parts[0])
+    search_parts = parts[1:]
+    if launcher == "accelerate" and len(parts) > 1 and parts[1] == "launch":
+        search_parts = parts[2:]
+    script = next((item for item in search_parts if item.endswith((".py", ".sh"))), "")
+    if script:
+        return basename(script)
+    token = next((item for item in search_parts if not item.startswith("-") and "=" not in item), "")
+    if token:
+        return basename(token)
+    return launcher
+
+
+def guess_parser(command):
+    lowered = command.lower()
+    if "deepspeed" in lowered:
+        return "deepspeed"
+    if "mapanything" in lowered:
+        return "mapanything"
+    return "auto"
+
+
+def is_regular_file_target(path):
+    if not path:
+        return ""
+    cleaned = path.replace(" (deleted)", "").strip()
+    if not cleaned or cleaned == "/dev/null":
+        return ""
+    if cleaned.startswith(("pipe:[", "socket:[", "anon_inode:")):
+        return ""
+    if cleaned.startswith(("/dev/pts/", "/dev/tty")):
+        return ""
+    return cleaned if os.path.isfile(cleaned) else ""
+
+
+def read_proc_link(pid, suffix):
+    try:
+        return os.readlink(f"/proc/{pid}/{suffix}")
+    except Exception:
+        return ""
+
+
+def read_proc_fd(pid, fd):
+    return is_regular_file_target(read_proc_link(pid, f"fd/{fd}"))
+
+
+def read_proc_cwd(pid):
+    try:
+        return os.path.realpath(f"/proc/{pid}/cwd")
+    except Exception:
+        return ""
+
+
+def normalize_path(value, cwd=""):
+    if not value:
+        return ""
+    cleaned = os.path.expanduser(str(value).strip().strip('"').strip("'"))
+    if not cleaned:
+        return ""
+    if not os.path.isabs(cleaned):
+        base = cwd or os.getcwd()
+        cleaned = os.path.abspath(os.path.join(base, cleaned))
+    return cleaned
+
+
+def extract_path_hints(command, cwd):
+    file_candidates = []
+    dir_candidates = []
+    parts = safe_split(command)
+    keys = {
+        "--log-file",
+        "--log_file",
+        "--log-path",
+        "--log_path",
+        "--output-dir",
+        "--output_dir",
+        "--logging-dir",
+        "--logging_dir",
+        "--log-dir",
+        "--log_dir",
+        "--save-dir",
+        "--save_dir",
+        "--run-dir",
+        "--run_dir",
+        "--workdir",
+    }
+    for index, item in enumerate(parts):
+        value = ""
+        if item.startswith("--"):
+            if "=" in item:
+                key, value = item.split("=", 1)
+            else:
+                key = item
+                if index + 1 < len(parts):
+                    value = parts[index + 1]
+            if key not in keys:
+                continue
+            normalized = normalize_path(value, cwd)
+            if not normalized:
+                continue
+            if os.path.isfile(normalized):
+                file_candidates.append(normalized)
+            else:
+                dir_candidates.append(normalized)
+            continue
+        if "=" in item:
+            key, value = item.split("=", 1)
+            if key not in {"output_dir", "logging_dir", "log_dir", "save_dir", "run_dir", "workdir", "log_path"}:
+                continue
+            normalized = normalize_path(value, cwd)
+            if not normalized:
+                continue
+            if os.path.isfile(normalized):
+                file_candidates.append(normalized)
+            else:
+                dir_candidates.append(normalized)
+
+    for token in parts:
+        if token.endswith((".py", ".sh")):
+            candidate = normalize_path(os.path.dirname(token), cwd)
+            if candidate:
+                dir_candidates.append(candidate)
+    if cwd:
+        dir_candidates.append(cwd)
+    return file_candidates, dir_candidates
+
+
+def candidate_log_files(base_dir):
+    if not base_dir or not os.path.isdir(base_dir):
+        return []
+    patterns = [
+        os.path.join(base_dir, "*.log"),
+        os.path.join(base_dir, "*.out"),
+        os.path.join(base_dir, "*.txt"),
+        os.path.join(base_dir, "logs", "*.log"),
+        os.path.join(base_dir, "logs", "*.out"),
+        os.path.join(base_dir, "logs", "*.txt"),
+        os.path.join(base_dir, "output", "*.log"),
+        os.path.join(base_dir, "output", "*.out"),
+        os.path.join(base_dir, "outputs", "*.log"),
+        os.path.join(base_dir, "outputs", "*.out"),
+        os.path.join(base_dir, "*", "*.log"),
+        os.path.join(base_dir, "*", "*.out"),
+    ]
+    items = []
+    for pattern in patterns:
+        items.extend(glob.glob(pattern))
+    return [item for item in items if os.path.isfile(item)]
+
+
+def pick_best_log_path(proc_items):
+    ranked = []
+    seen = set()
+    for proc in proc_items:
+        for priority, path in ((0, proc.get("stdout_path", "")), (0, proc.get("stderr_path", ""))):
+            target = is_regular_file_target(path)
+            if not target or target in seen:
+                continue
+            seen.add(target)
+            try:
+                ranked.append((priority, -os.path.getmtime(target), target))
+            except Exception:
+                continue
+
+        files, dirs = extract_path_hints(proc.get("command", ""), proc.get("cwd", ""))
+        for path in files:
+            target = is_regular_file_target(path)
+            if not target or target in seen:
+                continue
+            seen.add(target)
+            try:
+                ranked.append((1, -os.path.getmtime(target), target))
+            except Exception:
+                continue
+        for directory in dirs:
+            for target in candidate_log_files(directory):
+                normalized = is_regular_file_target(target)
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                try:
+                    ranked.append((2, -os.path.getmtime(normalized), normalized))
+                except Exception:
+                    continue
+    if not ranked:
+        return ""
+    ranked.sort()
+    return ranked[0][2]
+
+
+def build_pid_lookup():
+    stdout, _stderr, _rc = run_command("ps -eo pid=,etimes=,args=")
+    items = {}
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid, elapsed, command = parts
+        pid_int = int(pid)
+        items[pid_int] = {
+            "elapsed_seconds": int(elapsed),
+            "command": command,
+            "cwd": read_proc_cwd(pid_int),
+            "stdout_path": read_proc_fd(pid_int, 1),
+            "stderr_path": read_proc_fd(pid_int, 2),
+        }
+    return items
+
+
+def collect_processes(pattern, pid_lookup=None):
+    if not pattern:
+        return []
+    pid_lookup = pid_lookup or build_pid_lookup()
+    items = []
+    for pid, proc in pid_lookup.items():
+        command = proc["command"]
+        if re.search(pattern, command):
+            items.append({
+                "pid": int(pid),
+                "elapsed_seconds": int(proc["elapsed_seconds"]),
+                "command": command,
+                "cwd": proc.get("cwd", ""),
+            })
+    return items
+
+
+def is_training_candidate(command, has_gpu=False):
+    lowered = command.lower().strip()
+    if not lowered:
+        return False
+    if NON_TRAIN_HINT_RE.search(lowered):
+        return False
+    if TRAIN_LAUNCH_RE.search(lowered):
+        return True
+    if has_gpu and re.search(r"\bpython(?:\d+(?:\.\d+)*)?\b", lowered) and ".py" in lowered:
+        return True
+    if re.search(r"\bpython(?:\d+(?:\.\d+)*)?\b", lowered) and re.search(r"(train|trainer|finetune|fine-tune|pretrain|pre-training|sft|rlhf|dpo|ppo|main\.py)", lowered):
+        return True
+    return False
+
+
+def parse_nvidia_smi(pid_lookup=None):
+    result = {"gpus": [], "gpu_processes": [], "nvidia_smi": False, "gpu_error": ""}
+    pid_lookup = pid_lookup or build_pid_lookup()
+    stdout, stderr, rc = run_command(
+        "nvidia-smi --query-gpu=index,uuid,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit --format=csv,noheader,nounits"
+    )
+    if rc != 0:
+        result["gpu_error"] = stderr.strip() or "nvidia-smi unavailable"
+        return result
+    result["nvidia_smi"] = True
+    for line in stdout.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 8:
+            continue
+        result["gpus"].append({
+            "index": int(parts[0]),
+            "uuid": parts[1],
+            "name": parts[2],
+            "utilization_gpu": float(parts[3]) if parts[3] else None,
+            "memory_used_mb": float(parts[4]) if parts[4] else None,
+            "memory_total_mb": float(parts[5]) if parts[5] else None,
+            "temperature_c": float(parts[6]) if parts[6] else None,
+            "power_draw_w": float(parts[7]) if parts[7] else None,
+            "power_limit_w": float(parts[8]) if len(parts) > 8 and parts[8] else None,
+        })
+    proc_stdout, _proc_stderr, _proc_rc = run_command(
+        "nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory --format=csv,noheader,nounits"
+    )
+    for line in proc_stdout.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 4:
+            continue
+        pid = int(parts[1]) if parts[1] else None
+        proc = pid_lookup.get(pid or -1, {})
+        result["gpu_processes"].append({
+            "gpu_uuid": parts[0],
+            "pid": pid,
+            "process_name": parts[2],
+            "used_gpu_memory_mb": float(parts[3]) if parts[3] else None,
+            "command": proc.get("command", ""),
+            "elapsed_seconds": proc.get("elapsed_seconds"),
+            "cwd": proc.get("cwd", ""),
+            "stdout_path": proc.get("stdout_path", ""),
+            "stderr_path": proc.get("stderr_path", ""),
+        })
+    return result
+
+
+def discover_runs(pid_lookup, gpu_processes):
+    gpu_pid_set = {int(item.get("pid")) for item in gpu_processes if item.get("pid") is not None}
+    grouped = {}
+    for pid, proc in pid_lookup.items():
+        command = proc.get("command", "")
+        has_gpu = pid in gpu_pid_set
+        if not is_training_candidate(command, has_gpu=has_gpu):
+            continue
+        signature = command_signature(command) or f"pid-{pid}"
+        group_key = f"{proc.get('cwd', '')}::{signature}"
+        group = grouped.setdefault(group_key, {"proc_items": []})
+        group["proc_items"].append({
+            "pid": pid,
+            "elapsed_seconds": int(proc.get("elapsed_seconds") or 0),
+            "command": command,
+            "cwd": proc.get("cwd", ""),
+            "stdout_path": proc.get("stdout_path", ""),
+            "stderr_path": proc.get("stderr_path", ""),
+        })
+
+    results = []
+    for group in grouped.values():
+        proc_items = sorted(
+            group["proc_items"],
+            key=lambda item: (command_priority(item.get("command", "")), -int(item.get("elapsed_seconds") or 0), int(item.get("pid") or 0)),
+        )
+        primary = proc_items[0]
+        log_path = pick_best_log_path(proc_items)
+        log_exists = bool(log_path and os.path.exists(log_path))
+        last_update_at = ""
+        log_age_seconds = None
+        log_text = ""
+        log_error = ""
+        if log_exists:
+            try:
+                mtime = os.path.getmtime(log_path)
+                last_update_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(mtime))
+                log_age_seconds = int(time.time() - mtime)
+                log_text = tail_file(log_path)
+            except Exception as exc:
+                log_error = str(exc)
+        results.append({
+            "id": f"auto-{int(primary.get('pid') or 0)}",
+            "label": summarize_command(primary.get("command", "")) or f"Task {primary.get('pid')}",
+            "parser": guess_parser(primary.get("command", "")),
+            "log_path": log_path,
+            "log_exists": log_exists,
+            "last_update_at": last_update_at,
+            "log_age_seconds": log_age_seconds,
+            "tail": log_text,
+            "log_error": log_error,
+            "matched_processes": [
+                {
+                    "pid": item.get("pid"),
+                    "elapsed_seconds": item.get("elapsed_seconds"),
+                    "command": item.get("command", ""),
+                    "cwd": item.get("cwd", ""),
+                }
+                for item in proc_items
+            ],
+        })
+    return results
+
+
+def read_cpu_sample():
+    with open("/proc/stat", "r", encoding="utf-8") as handle:
+        parts = handle.readline().split()
+    values = [int(item) for item in parts[1:]]
+    idle = values[3] + (values[4] if len(values) > 4 else 0)
+    total = sum(values)
+    return total, idle
+
+
+def collect_cpu():
+    try:
+        total_a, idle_a = read_cpu_sample()
+        time.sleep(0.2)
+        total_b, idle_b = read_cpu_sample()
+        total_delta = max(total_b - total_a, 1)
+        idle_delta = max(idle_b - idle_a, 0)
+        usage_percent = max(0.0, min(100.0, 100.0 * (total_delta - idle_delta) / total_delta))
+    except Exception:
+        usage_percent = None
+    return {
+        "usage_percent": round(usage_percent, 2) if usage_percent is not None else None,
+        "cores_logical": int(os.cpu_count() or 0),
+    }
+
+
+def collect_memory():
+    info = {}
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+            for line in handle:
+                key, raw_value = line.split(":", 1)
+                value = raw_value.strip().split()[0]
+                info[key] = int(value)
+    except Exception as exc:
+        return {"error": str(exc)}
+
+    total_kb = int(info.get("MemTotal", 0))
+    available_kb = int(info.get("MemAvailable", info.get("MemFree", 0)))
+    used_kb = max(total_kb - available_kb, 0)
+    swap_total_kb = int(info.get("SwapTotal", 0))
+    swap_free_kb = int(info.get("SwapFree", 0))
+    swap_used_kb = max(swap_total_kb - swap_free_kb, 0)
+    return {
+        "total_mb": round(total_kb / 1024.0, 2),
+        "used_mb": round(used_kb / 1024.0, 2),
+        "available_mb": round(available_kb / 1024.0, 2),
+        "used_percent": round(100.0 * used_kb / total_kb, 2) if total_kb else None,
+        "swap_total_mb": round(swap_total_kb / 1024.0, 2),
+        "swap_used_mb": round(swap_used_kb / 1024.0, 2),
+        "swap_used_percent": round(100.0 * swap_used_kb / swap_total_kb, 2) if swap_total_kb else 0.0,
+    }
+
+
+def normalize_external_queue_status(value):
+    raw = str(value or "").strip()
+    lowered = raw.lower()
+    if lowered in {"pd", "pending", "queued", "qw", "waiting", "hold", "held", "priority", "resources"}:
+        return "queued"
+    if lowered in {"cf", "configuring", "allocating", "launching", "starting", "resuming"}:
+        return "starting"
+    if lowered in {"r", "running", "cg", "completing"}:
+        return "running"
+    if lowered in {"cd", "completed", "done"}:
+        return "completed"
+    if lowered in {"f", "failed", "timeout", "oom", "out_of_memory", "node_fail", "boot_fail"}:
+        return "failed"
+    if lowered in {"ca", "cancelled", "canceled", "nf", "preempted"}:
+        return "canceled"
+    return "unknown"
+
+
+def normalize_external_queue_items(items, source):
+    normalized = []
+    for raw in items or []:
+        if not isinstance(raw, dict):
+            continue
+        item_id = str(raw.get("id") or raw.get("job_id") or raw.get("name") or raw.get("label") or "").strip()
+        label = str(raw.get("label") or raw.get("name") or item_id or "External Job").strip() or "External Job"
+        if not item_id and not label:
+            continue
+        raw_status = str(raw.get("raw_status") or raw.get("status") or raw.get("state") or "").strip()
+        status = normalize_external_queue_status(raw.get("status") or raw.get("state") or raw_status)
+        if status in {"completed", "failed", "canceled"}:
+            continue
+        gpu_count = raw.get("gpu_count")
+        try:
+            gpu_count = int(gpu_count) if gpu_count not in (None, "") else None
+        except Exception:
+            gpu_count = None
+        normalized.append({
+            "id": item_id or label,
+            "owner": str(raw.get("owner") or raw.get("user") or "").strip(),
+            "label": label,
+            "status": status,
+            "source": str(raw.get("source") or source or "external").strip() or "external",
+            "raw_status": raw_status,
+            "submitted_at": str(raw.get("submitted_at") or raw.get("submit_time") or raw.get("created_at") or "").strip(),
+            "gpu_count": gpu_count,
+            "command": str(raw.get("command") or "").strip(),
+            "workdir": str(raw.get("workdir") or raw.get("cwd") or "").strip(),
+            "reason": str(raw.get("reason") or raw.get("note") or "").strip(),
+        })
+    sort_order = {"queued": 0, "starting": 1, "running": 2, "unknown": 3}
+    return sorted(normalized, key=lambda item: (sort_order.get(item.get("status"), 9), item.get("submitted_at") or "", item.get("id") or ""))
+
+
+def collect_custom_external_queue(command):
+    command = str(command or "").strip()
+    if not command:
+        return {"source": "", "error": "", "items": []}
+    stdout, stderr, code = run_command(command)
+    if code != 0:
+        return {"source": "custom", "error": stderr.strip() or f"queue probe exited with code {code}", "items": []}
+    try:
+        payload = json.loads(stdout or "[]")
+    except Exception as exc:
+        return {"source": "custom", "error": f"queue probe must output JSON: {exc}", "items": []}
+    if isinstance(payload, dict):
+        items = payload.get("items", [])
+        source = str(payload.get("source") or "custom")
+        error = str(payload.get("error") or "")
+    elif isinstance(payload, list):
+        items = payload
+        source = "custom"
+        error = ""
+    else:
+        return {"source": "custom", "error": "queue probe JSON must be a list or an object with items", "items": []}
+    return {
+        "source": source,
+        "error": error,
+        "items": normalize_external_queue_items(items, source),
+    }
+
+
+def collect_slurm_external_queue():
+    if not shutil.which("squeue"):
+        return {"source": "", "error": "", "items": []}
+    env = dict(os.environ)
+    env["SLURM_TIME_FORMAT"] = "%Y-%m-%dT%H:%M:%S"
+    proc = subprocess.run(
+        ["squeue", "-h", "-o", "%i|%u|%T|%V|%j|%r|%o|%Z"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    if proc.returncode != 0:
+        return {"source": "slurm", "error": proc.stderr.strip() or "squeue failed", "items": []}
+    items = []
+    for line in (proc.stdout or "").splitlines():
+        parts = line.split("|", 7)
+        if len(parts) < 8:
+            continue
+        job_id, owner, state, submitted_at, label, reason, command, workdir = [part.strip() for part in parts]
+        items.append({
+            "id": job_id,
+            "owner": owner,
+            "label": label or job_id,
+            "status": state,
+            "raw_status": state,
+            "submitted_at": submitted_at,
+            "reason": reason,
+            "command": command,
+            "workdir": workdir,
+        })
+    return {
+        "source": "slurm",
+        "error": "",
+        "items": normalize_external_queue_items(items, "slurm"),
+    }
+
+
+def collect_external_queue():
+    queue_probe_command = str(cfg.get("queue_probe_command") or "").strip()
+    if queue_probe_command:
+        return collect_custom_external_queue(queue_probe_command)
+    return collect_slurm_external_queue()
+
+
+
+def collect_disk(path="/"):
+    try:
+        stat = os.statvfs(path)
+        total_bytes = stat.f_frsize * stat.f_blocks
+        free_bytes = stat.f_frsize * stat.f_bavail
+        used_bytes = max(total_bytes - free_bytes, 0)
+        return {
+            "path": path,
+            "total_gb": round(total_bytes / (1024.0 ** 3), 2),
+            "used_gb": round(used_bytes / (1024.0 ** 3), 2),
+            "free_gb": round(free_bytes / (1024.0 ** 3), 2),
+            "used_percent": round(100.0 * used_bytes / total_bytes, 2) if total_bytes else None,
+        }
+    except Exception as exc:
+        return {"path": path, "error": str(exc)}
+
+
+pid_lookup = build_pid_lookup()
+payload = {
+    "hostname": socket.gethostname(),
+    "collected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    "loadavg": list(os.getloadavg()) if hasattr(os, "getloadavg") else [],
+    "cpu": collect_cpu(),
+    "memory": collect_memory(),
+    "disk": collect_disk("/"),
+    "runs": [],
+    "discovered_runs": [],
+    "external_queue": collect_external_queue(),
+}
+
+payload.update(parse_nvidia_smi(pid_lookup))
+
+for run_cfg in cfg.get("runs", []):
+    path = resolve_path(run_cfg)
+    exists = bool(path and os.path.exists(path))
+    last_update_at = ""
+    log_age_seconds = None
+    log_text = ""
+    log_error = ""
+    if exists:
+        try:
+            mtime = os.path.getmtime(path)
+            last_update_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(mtime))
+            log_age_seconds = int(time.time() - mtime)
+            log_text = tail_file(path)
+        except Exception as exc:
+            log_error = str(exc)
+    processes = collect_processes(run_cfg.get("process_match", ""), pid_lookup)
+    payload["runs"].append({
+        "id": run_cfg["id"],
+        "label": run_cfg["label"],
+        "log_path": path,
+        "log_exists": exists,
+        "last_update_at": last_update_at,
+        "log_age_seconds": log_age_seconds,
+        "tail": log_text,
+        "log_error": log_error,
+        "matched_processes": processes,
+    })
+
+payload["discovered_runs"] = discover_runs(pid_lookup, payload.get("gpu_processes", []))
+print(json.dumps(payload))
+'''

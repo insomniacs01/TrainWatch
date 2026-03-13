@@ -1,10 +1,13 @@
-const CACHE_NAME = "train-watch-v3";
+const CACHE_NAME = "train-watch-v4";
 const ASSETS = [
   "/",
   "/manifest.webmanifest",
   "/service-worker.js",
   "/static/styles.css",
   "/static/app.js",
+  "/static/api-client.js",
+  "/static/charts.js",
+  "/static/formatters.js",
   "/static/icon.svg",
 ];
 

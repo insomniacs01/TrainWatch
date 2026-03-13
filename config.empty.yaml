@@ -5,5 +5,6 @@ server:
   poll_seconds: 5
   sqlite_path: data/train-watch-empty.sqlite3
   retention_days: 7
+  persist_passwords: false
 
 nodes: []

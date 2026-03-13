@@ -43,6 +43,31 @@ class SQLiteStore:
 
                 CREATE INDEX IF NOT EXISTS idx_timeseries_lookup
                 ON timeseries(node_id, run_id, metric, ts);
+
+                CREATE TABLE IF NOT EXISTS queue_jobs (
+                    id TEXT PRIMARY KEY,
+                    node_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_queue_jobs_lookup
+                ON queue_jobs(node_id, status, created_at);
+
+                CREATE TABLE IF NOT EXISTS persisted_nodes (
+                    id TEXT PRIMARY KEY,
+                    host TEXT NOT NULL,
+                    port INTEGER NOT NULL,
+                    user TEXT NOT NULL,
+                    transport TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_persisted_nodes_lookup
+                ON persisted_nodes(host, port, user, transport, updated_at);
                 """
             )
 
@@ -144,3 +169,60 @@ class SQLiteStore:
                     (metric, node_id, from_ts, to_ts),
                 ).fetchall()
         return [{"ts": row["ts"], "value": row["value"]} for row in rows]
+
+    def list_queue_jobs(self) -> List[Dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload FROM queue_jobs ORDER BY created_at ASC, id ASC"
+            ).fetchall()
+        return [json.loads(row["payload"]) for row in rows]
+
+    def upsert_queue_job(self, payload: Dict[str, Any]) -> None:
+        encoded = json.dumps(payload, ensure_ascii=False)
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO queue_jobs(id, node_id, status, created_at, updated_at, payload) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    str(payload.get("id", "")),
+                    str(payload.get("node_id", "")),
+                    str(payload.get("status", "queued")),
+                    str(payload.get("created_at", utc_now_iso())),
+                    str(payload.get("updated_at", utc_now_iso())),
+                    encoded,
+                ),
+            )
+            connection.commit()
+
+    def delete_queue_job(self, job_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM queue_jobs WHERE id = ?", (job_id,))
+            connection.commit()
+
+    def list_persisted_nodes(self) -> List[Dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload FROM persisted_nodes ORDER BY updated_at ASC, id ASC"
+            ).fetchall()
+        return [json.loads(row["payload"]) for row in rows]
+
+    def upsert_persisted_node(self, payload: Dict[str, Any]) -> None:
+        encoded = json.dumps(payload, ensure_ascii=False)
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO persisted_nodes(id, host, port, user, transport, updated_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(payload.get("id", "")),
+                    str(payload.get("host", "")),
+                    int(payload.get("port", 22)),
+                    str(payload.get("user", "")),
+                    str(payload.get("transport", "ssh")),
+                    utc_now_iso(),
+                    encoded,
+                ),
+            )
+            connection.commit()
+
+    def delete_persisted_node(self, node_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM persisted_nodes WHERE id = ?", (node_id,))
+            connection.commit()
