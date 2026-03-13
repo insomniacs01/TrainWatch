@@ -1,4 +1,5 @@
 import { escapeAttr, escapeHtml } from "./html.js";
+import { statusLabel } from "./formatters.js";
 
 function safeText(value) {
   return escapeHtml(value ?? "");
@@ -16,14 +17,17 @@ export function createJobsController({
   showBanner,
   renderJobsPanel,
   renderExternalJobsPanel,
+  withAuthRecovery = null,
 } = {}) {
+  const guard = withAuthRecovery || (async (task) => task());
+
   function renderConnectionOptions() {
     if (!els.jobNodeSelect) return;
     const items = state.connections || [];
     const previousValue = els.jobNodeSelect.value;
     els.jobNodeSelect.innerHTML = items.length
       ? items.map((item) => {
-        const summary = `${item.label} · ${item.status || "unknown"}${item.jobs ? ` · queue ${item.jobs}` : ""}`;
+        const summary = `${item.label} · ${statusLabel(item.status)}${item.jobs ? ` · 队列 ${item.jobs}` : ""}`;
         return `<option value="${safeAttr(item.id)}">${safeText(summary)}</option>`;
       }).join("")
       : `<option value="">请先连接 SSH 机器</option>`;
@@ -41,13 +45,13 @@ export function createJobsController({
   }
 
   async function loadConnections() {
-    const payload = await apiGet("/api/v1/connections");
+    const payload = await guard(() => apiGet("/api/v1/connections"));
     state.connections = payload.items || [];
     renderConnectionOptions();
   }
 
   async function loadJobs() {
-    const payload = await apiGet("/api/v1/jobs");
+    const payload = await guard(() => apiGet("/api/v1/jobs"));
     state.jobs = payload.items || [];
     state.jobsSummary = payload.summary || {};
     state.externalJobs = payload.external_items || [];
@@ -71,7 +75,7 @@ export function createJobsController({
     if (!jobId) return;
     if (!window.confirm("确认取消这个排队任务吗？")) return;
     try {
-      await apiJson("DELETE", `/api/v1/jobs/${encodeURIComponent(jobId)}`);
+      await guard(() => apiJson("DELETE", `/api/v1/jobs/${encodeURIComponent(jobId)}`));
       await loadJobs();
       showBanner("已取消排队任务", "info");
     } catch (error) {
@@ -99,21 +103,21 @@ export function createJobsController({
     }
     setJobSubmitting(true);
     try {
-      await apiJson("POST", "/api/v1/jobs", {
+      await guard(() => apiJson("POST", "/api/v1/jobs", {
         node_id: nodeId,
-        owner: String(form.get("owner") || "").trim() || "Anonymous",
+        owner: String(form.get("owner") || "").trim() || "匿名",
         label: String(form.get("label") || "").trim() || null,
         command,
         gpu_count: Number(form.get("gpu_count") || 1),
         workdir: String(form.get("workdir") || "").trim(),
         parser: String(form.get("parser") || "auto"),
-      });
+      }));
       els.jobForm.reset();
       const gpuCountInput = document.getElementById("jobGpuCountInput");
       if (gpuCountInput) gpuCountInput.value = 1;
       renderConnectionOptions();
       await loadJobs();
-      showBanner("任务已加入队列，系统会按 FIFO 自动抢占空闲 GPU。", "info");
+      showBanner("任务已加入队列，系统会按先来先服务在 GPU 空出后自动启动。", "info");
     } catch (error) {
       showBanner(error.message || String(error), "error");
     } finally {

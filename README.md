@@ -212,18 +212,22 @@ That creates an app-like icon on iPhone, while `v1` still remains a PWA rather t
 ## Tests
 
 ```bash
-python -m unittest discover -s tests -p 'test_*.py'
+./.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
 ```
+
+If you do not use the bundled virtualenv, `python3 -m unittest discover -s tests -p 'test_*.py'` also works.
 
 ## Security Notes
 
 Train Watch is currently designed for single-user, self-hosted usage.
 
-- set `server.shared_token` before exposing it to broader networks
+- `server.shared_token` is optional; leave it empty for the simplest local/self-hosted setup
+- if you expose the service beyond a trusted local environment, set `server.shared_token`
 - frontend tokens are kept in browser session storage
 - WebSocket authentication is sent as an initial auth message instead of a URL query parameter
 - UI-added SSH connections are persisted in SQLite so they survive restart; by default, SSH passwords stay in memory and are not written to SQLite
 - set `server.persist_passwords: true` only if you explicitly want password-based UI connections to survive restart
+- SSH host keys now default to `accept-new`; switch `server.ssh_host_key_policy` to `strict` if you want pre-provisioned host keys only
 - queue submitter names are plain text labels rather than a real auth system
 - avoid committing real hostnames, usernames, ports, private paths, or secrets into the repository
 

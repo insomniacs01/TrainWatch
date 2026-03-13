@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api_inputs import QueueJobInput, SSHConnectionInput, build_node_from_input, build_queue_job_from_input
+from .errors import InputValidationError
 from .config import load_config
 from .runtime import TrainWatchRuntime
 from .ssh_support import ssh_config_alias_records
@@ -18,6 +20,7 @@ from .ssh_support import ssh_config_alias_records
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 WEBSOCKET_AUTH_TIMEOUT_SECONDS = 10
+logger = logging.getLogger(__name__)
 
 
 def _parse_timestamp(value: Optional[str], default_delta_hours: Optional[int] = None) -> str:
@@ -35,6 +38,8 @@ def _parse_timestamp(value: Optional[str], default_delta_hours: Optional[int] = 
 
 
 def _check_token(expected_token: str, actual_token: str) -> None:
+    if expected_token and not actual_token:
+        raise HTTPException(status_code=401, detail="Authentication token required")
     if expected_token and actual_token != expected_token:
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -43,25 +48,43 @@ def require_token(request: Request) -> None:
     runtime = request.app.state.runtime
     expected = runtime.config.server.shared_token
     actual = request.headers.get("x-train-watch-token", "")
-    _check_token(expected, actual)
+    try:
+        _check_token(expected, actual)
+    except HTTPException:
+        client_host = request.client.host if request.client else "unknown"
+        if actual:
+            logger.warning("Rejected API request with invalid auth from %s", client_host)
+        else:
+            logger.debug("Rejected API request without auth from %s", client_host)
+        raise
 
 
 async def _authenticate_websocket(websocket: WebSocket, expected_token: str) -> bool:
+    if not expected_token:
+        return True
     try:
         payload = await asyncio.wait_for(websocket.receive_json(), timeout=WEBSOCKET_AUTH_TIMEOUT_SECONDS)
     except Exception:
         await websocket.close(code=4401)
+        logger.debug("Rejected websocket due to missing auth payload")
         return False
 
     if not isinstance(payload, dict) or payload.get("type") != "auth":
         await websocket.close(code=4401)
+        logger.debug("Rejected websocket due to malformed auth payload")
         return False
 
     actual_token = str(payload.get("token", ""))
-    if expected_token and actual_token != expected_token:
+    if actual_token != expected_token:
         await websocket.close(code=4401)
+        client_host = websocket.client.host if websocket.client else "unknown"
+        logger.warning("Rejected websocket with invalid auth from %s", client_host)
         return False
     return True
+
+
+def _input_error_to_http(exc: InputValidationError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=str(exc))
 
 
 def create_app(runtime: TrainWatchRuntime) -> FastAPI:
@@ -144,9 +167,11 @@ def create_app(runtime: TrainWatchRuntime) -> FastAPI:
 
     @app.post("/api/v1/jobs", dependencies=[Depends(require_token)])
     async def add_job(payload: QueueJobInput) -> dict:
-        job = build_queue_job_from_input(payload, runtime.find_node)
         try:
+            job = build_queue_job_from_input(payload, runtime.find_node)
             item = await runtime.enqueue_job(job)
+        except InputValidationError as exc:
+            raise _input_error_to_http(exc) from exc
         except ValueError as exc:
             detail = str(exc)
             status_code = 404 if "not found" in detail.lower() else 400
@@ -165,9 +190,11 @@ def create_app(runtime: TrainWatchRuntime) -> FastAPI:
 
     @app.post("/api/v1/connections", dependencies=[Depends(require_token)])
     async def add_connection(payload: SSHConnectionInput) -> dict:
-        node = build_node_from_input(payload)
         try:
+            node = build_node_from_input(payload)
             item = await runtime.add_node(node)
+        except InputValidationError as exc:
+            raise _input_error_to_http(exc) from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"item": item}

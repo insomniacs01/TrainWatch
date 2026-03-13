@@ -1,10 +1,13 @@
 server:
   host: 127.0.0.1
   port: 8420
-  shared_token: ""
+  shared_token: ""  # optional; set only if you want token-based access
   poll_seconds: 5
   sqlite_path: data/train-watch-empty.sqlite3
   retention_days: 7
   persist_passwords: false
+  log_level: INFO
+  ssh_host_key_policy: accept-new
+  ssh_known_hosts_path: ~/.ssh/known_hosts
 
 nodes: []

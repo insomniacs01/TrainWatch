@@ -1,6 +1,6 @@
 import asyncio
-import base64
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -8,7 +8,7 @@ from .config import AppConfig, NodeConfig, RunConfig
 from .mock_data import build_mock_raw
 from .models import AlertEvent, AppSnapshot, ExternalQueueItem, GPUInfo, GPUProcess, NodeSnapshot, RunSnapshot
 from .parsers import parse_training_output
-from .remote_probe import REMOTE_SCRIPT
+from .remote_probe import build_remote_probe_command
 from .run_activity import command_signature, derive_run_activity
 from .ssh_pool import ParamikoConnectionPool
 
@@ -17,38 +17,29 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+logger = logging.getLogger(__name__)
+
+
+def is_gpu_busy(gpu: GPUInfo) -> bool:
+    utilization = float(gpu.utilization_gpu or 0.0)
+    memory_used = float(gpu.memory_used_mb or 0.0)
+    return utilization >= 10.0 or memory_used >= 1024.0
+
+
+def count_busy_gpus(gpus: List[GPUInfo]) -> int:
+    return sum(1 for gpu in gpus if gpu.is_busy)
+
+
 class Collector:
     def __init__(self, config: AppConfig, pool: Optional[ParamikoConnectionPool] = None) -> None:
         self.config = config
-        self.pool = pool or ParamikoConnectionPool()
+        self.pool = pool or ParamikoConnectionPool(config.server)
 
     def close(self) -> None:
         self.pool.close_all()
 
     def _build_command(self, node: NodeConfig) -> str:
-        payload = {
-            "runs": [
-                {
-                    "id": run.id,
-                    "label": run.label,
-                    "log_path": run.log_path,
-                    "log_glob": run.log_glob,
-                    "process_match": run.process_match,
-                }
-                for run in node.runs
-            ],
-            "queue_probe_command": node.queue_probe_command,
-        }
-        encoded = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
-        script = REMOTE_SCRIPT.replace("__PAYLOAD__", encoded)
-        return """PYTHON_BIN=$(command -v python3 || command -v python)
-if [ -z "$PYTHON_BIN" ]; then
-  echo "python not found" >&2
-  exit 127
-fi
-"$PYTHON_BIN" - <<'PY'
-%s
-PY""" % script
+        return build_remote_probe_command(node)
 
     def _build_error_snapshot(self, node: NodeConfig, error: str, status: Optional[str] = None) -> NodeSnapshot:
         snapshot_status = status or ("offline" if node.transport == "ssh" else "degraded")
@@ -98,6 +89,7 @@ PY""" % script
             raw = json.loads(output)
             return self._build_node_snapshot(node, raw)
         except Exception as exc:
+            logger.warning("Node collection failed for %s (%s): %s", node.label, node.host, exc)
             return self._build_error_snapshot(node, str(exc))
 
     def _build_node_snapshot(self, node: NodeConfig, raw: Dict[str, Any]) -> NodeSnapshot:
@@ -136,6 +128,7 @@ PY""" % script
                 power_limit_w=raw_gpu.get("power_limit_w"),
                 processes=process_by_uuid.get(str(raw_gpu.get("uuid", "")), []),
             )
+            gpu.is_busy = is_gpu_busy(gpu)
             gpus.append(gpu)
 
         runs = self._build_runs(node, raw, gpu_processes)
@@ -202,7 +195,7 @@ PY""" % script
             except (TypeError, ValueError):
                 parsed_gpu_count = None
             item_id = str(raw_item.get("id") or raw_item.get("label") or "").strip()
-            label = str(raw_item.get("label") or item_id or "External Job").strip() or "External Job"
+            label = str(raw_item.get("label") or item_id or "外部任务").strip() or "外部任务"
             if not item_id and not label:
                 continue
             items.append(
@@ -246,6 +239,7 @@ PY""" % script
             "disk_free_gb": float(disk.get("free_gb") or 0.0),
             "disk_used_percent": float(disk.get("used_percent") or 0.0),
             "gpu_count": float(len(gpus)),
+            "gpus_busy": float(count_busy_gpus(gpus)),
             "gpu_utilization_avg": 0.0,
             "gpu_temperature_avg": 0.0,
             "gpu_memory_used_mb_total": 0.0,
@@ -455,7 +449,7 @@ PY""" % script
             "runs_running": sum(1 for run in runs if run.status == "running"),
             "runs_alerting": sum(1 for run in runs if run.status in ("failed", "stalled")),
             "gpus_total": len(gpus),
-            "gpus_busy": sum(1 for gpu in gpus if (gpu.utilization_gpu or 0) >= 10),
+            "gpus_busy": count_busy_gpus(gpus),
             "external_queue_total": len(external_items),
             "external_queue_queued": sum(1 for item in external_items if item.status == "queued"),
             "external_queue_starting": sum(1 for item in external_items if item.status == "starting"),

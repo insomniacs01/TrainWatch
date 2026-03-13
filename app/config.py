@@ -1,8 +1,14 @@
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+
+
+DEFAULT_KNOWN_HOSTS_PATH = Path("~/.ssh/known_hosts").expanduser()
+SSH_HOST_KEY_POLICIES = {"accept-new", "strict"}
+PARSER_NAMES = {"auto", "mapanything", "generic_torch", "deepspeed"}
 
 
 @dataclass
@@ -14,6 +20,9 @@ class ServerConfig:
     sqlite_path: str = "data/train-watch.sqlite3"
     retention_days: int = 7
     persist_passwords: bool = False
+    log_level: str = "INFO"
+    ssh_host_key_policy: str = "accept-new"
+    ssh_known_hosts_path: str = str(DEFAULT_KNOWN_HOSTS_PATH)
 
 
 @dataclass
@@ -54,6 +63,35 @@ class AppConfig:
     server: ServerConfig
     nodes: List[NodeConfig]
     config_path: Path
+
+
+def _normalize_ssh_host_key_policy(value: str) -> str:
+    normalized = str(value or "accept-new").strip().lower() or "accept-new"
+    if normalized not in SSH_HOST_KEY_POLICIES:
+        raise ValueError(
+            "server.ssh_host_key_policy must be one of: %s" % ", ".join(sorted(SSH_HOST_KEY_POLICIES))
+        )
+    return normalized
+
+
+def finalize_server_config(server: ServerConfig) -> ServerConfig:
+    server.host = str(server.host or "127.0.0.1").strip() or "127.0.0.1"
+    server.port = max(1, int(server.port or 8420))
+    server.shared_token = os.environ.get("TRAIN_WATCH_SHARED_TOKEN", str(server.shared_token or "")).strip()
+    server.poll_seconds = max(3, int(server.poll_seconds or 10))
+    server.retention_days = max(1, int(server.retention_days or 7))
+    server.persist_passwords = _parse_bool(server.persist_passwords, False)
+    server.log_level = str(server.log_level or "INFO").strip().upper() or "INFO"
+    server.ssh_host_key_policy = _normalize_ssh_host_key_policy(server.ssh_host_key_policy)
+    server.ssh_known_hosts_path = str(Path(server.ssh_known_hosts_path or DEFAULT_KNOWN_HOSTS_PATH).expanduser())
+    return server
+
+
+def _normalize_parser_name(value: str) -> str:
+    normalized = str(value or "auto").strip().lower() or "auto"
+    if normalized not in PARSER_NAMES:
+        raise ValueError("parser must be one of: %s" % ", ".join(sorted(PARSER_NAMES)))
+    return normalized
 
 
 def run_to_dict(run: RunConfig) -> Dict[str, Any]:
@@ -116,7 +154,7 @@ def run_from_persisted_dict(item: Dict[str, Any]) -> RunConfig:
         log_glob=str(item.get("log_glob")) if item.get("log_glob") else None,
         workdir=str(item.get("workdir", "")),
         process_match=str(item.get("process_match", "")),
-        parser=str(item.get("parser", "auto") or "auto"),
+        parser=_normalize_parser_name(str(item.get("parser", "auto") or "auto")),
         stall_after_seconds=max(30, int(item.get("stall_after_seconds", 900))),
         completion_regex=str(item.get("completion_regex", r"(Training complete|Finished training|saving final checkpoint)")),
         error_regex=str(item.get("error_regex", r"(Traceback|RuntimeError|CUDA out of memory|NCCL error|AssertionError)")),
@@ -171,7 +209,7 @@ def _load_run(item: Dict[str, Any], allow_missing_log_source: bool = False) -> R
         log_glob=str(log_glob) if log_glob else None,
         workdir=str(item.get("workdir", "")),
         process_match=str(item.get("process_match", "")),
-        parser=str(item.get("parser", "auto") or "auto"),
+        parser=_normalize_parser_name(str(item.get("parser", "auto") or "auto")),
         stall_after_seconds=int(item.get("stall_after_seconds", 900)),
         completion_regex=str(
             item.get(
@@ -242,7 +280,7 @@ def load_config(path_value: str) -> AppConfig:
         raw = yaml.safe_load(handle) or {}
 
     server_raw = raw.get("server") or {}
-    server = ServerConfig(
+    server = finalize_server_config(ServerConfig(
         host=str(server_raw.get("host", "127.0.0.1")),
         port=int(server_raw.get("port", 8420)),
         shared_token=str(server_raw.get("shared_token", "")),
@@ -253,7 +291,13 @@ def load_config(path_value: str) -> AppConfig:
         ),
         retention_days=max(1, int(server_raw.get("retention_days", 7))),
         persist_passwords=_parse_bool(server_raw.get("persist_passwords", False)),
-    )
+        log_level=str(server_raw.get("log_level", "INFO")),
+        ssh_host_key_policy=str(server_raw.get("ssh_host_key_policy", "accept-new")),
+        ssh_known_hosts_path=_resolve_path(
+            config_path.parent,
+            str(server_raw.get("ssh_known_hosts_path", DEFAULT_KNOWN_HOSTS_PATH)),
+        ),
+    ))
 
     nodes_raw = raw.get("nodes") or []
     nodes = [_load_node(config_path.parent, item or {}) for item in nodes_raw]

@@ -23,9 +23,20 @@ class RecordingSSHClient:
     def __init__(self):
         self.policy = None
         self.connected_kwargs = None
+        self.loaded_system_host_keys = False
+        self.loaded_host_keys_path = None
 
     def set_missing_host_key_policy(self, policy):
         self.policy = policy
+
+    def load_system_host_keys(self):
+        self.loaded_system_host_keys = True
+
+    def load_host_keys(self, path):
+        self.loaded_host_keys_path = path
+
+    def save_host_keys(self, path):
+        self.loaded_host_keys_path = path
 
     def connect(self, **kwargs):
         self.connected_kwargs = kwargs
@@ -176,6 +187,52 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(item.raw_status, "PENDING")
         self.assertEqual(item.reason, "Resources")
 
+    def test_busy_gpu_uses_shared_utilization_and_memory_rule(self) -> None:
+        payload = {
+            "hostname": "trainer-a",
+            "collected_at": "2026-03-13T10:00:00Z",
+            "loadavg": [0.2, 0.3, 0.4],
+            "cpu": {"usage_percent": 12.0, "cores_logical": 8},
+            "memory": {"total_mb": 1024.0, "used_mb": 512.0, "available_mb": 512.0, "used_percent": 50.0},
+            "disk": {"path": "/", "total_gb": 100.0, "used_gb": 25.0, "free_gb": 75.0, "used_percent": 25.0},
+            "nvidia_smi": True,
+            "gpu_error": "",
+            "gpus": [
+                {
+                    "index": 0,
+                    "uuid": "GPU-0",
+                    "name": "NVIDIA A100",
+                    "utilization_gpu": 0.0,
+                    "memory_used_mb": 4096.0,
+                    "memory_total_mb": 81920.0,
+                    "temperature_c": 55.0,
+                    "power_draw_w": 90.0,
+                    "power_limit_w": 300.0,
+                },
+                {
+                    "index": 1,
+                    "uuid": "GPU-1",
+                    "name": "NVIDIA A100",
+                    "utilization_gpu": 0.0,
+                    "memory_used_mb": 128.0,
+                    "memory_total_mb": 81920.0,
+                    "temperature_c": 42.0,
+                    "power_draw_w": 45.0,
+                    "power_limit_w": 300.0,
+                },
+            ],
+            "gpu_processes": [],
+            "runs": [],
+        }
+        collector = Collector(self.config, pool=FakePool(payload))
+        node = collector.collect_node(self.config.nodes[0])
+        snapshot, _events = asyncio.run(collector.poll_once(None, self.config.nodes))
+
+        self.assertTrue(node.gpus[0].is_busy)
+        self.assertFalse(node.gpus[1].is_busy)
+        self.assertEqual(node.metrics["gpus_busy"], 1.0)
+        self.assertEqual(snapshot.summary["gpus_busy"], 1)
+
     def test_paramiko_pool_supports_password_auth(self) -> None:
         node = NodeConfig(
             id="node-password",
@@ -192,6 +249,7 @@ class CollectorTests(unittest.TestCase):
             client = ParamikoConnectionPool()._connect(node)
 
         self.assertIs(client, fake_client)
+        self.assertTrue(fake_client.loaded_system_host_keys)
         self.assertEqual(fake_client.connected_kwargs["hostname"], "gpu.example.com")
         self.assertEqual(fake_client.connected_kwargs["port"], 2222)
         self.assertEqual(fake_client.connected_kwargs["username"], "ubuntu")
@@ -199,6 +257,26 @@ class CollectorTests(unittest.TestCase):
         self.assertFalse(fake_client.connected_kwargs["allow_agent"])
         self.assertFalse(fake_client.connected_kwargs["look_for_keys"])
         self.assertNotIn("key_filename", fake_client.connected_kwargs)
+
+    def test_paramiko_pool_rejects_password_for_ssh_alias(self) -> None:
+        node = NodeConfig(
+            id="node-alias",
+            label="Alias Node",
+            host="gpu-lab-a",
+            port=22,
+            user="",
+            key_path="",
+            password="ssh-secret",
+            runs=[],
+        )
+        with patch("app.ssh_pool.ssh_config_alias_exists", return_value=True):
+            with patch.object(ParamikoConnectionPool, "_execute_system_ssh") as system_ssh:
+                with patch("app.ssh_pool.paramiko.SSHClient") as ssh_client:
+                    with self.assertRaisesRegex(RuntimeError, "Password auth is not supported"):
+                        ParamikoConnectionPool().execute(node, "hostname", 15)
+
+        system_ssh.assert_not_called()
+        ssh_client.assert_not_called()
 
     def test_node_without_nvidia_smi_is_still_online_for_system_metrics(self) -> None:
         payload = {

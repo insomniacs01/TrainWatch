@@ -1,9 +1,14 @@
 import argparse
+import logging
 import os
 
 import uvicorn
 
 from app.config import load_config
+from app.logging_utils import configure_logging
+
+
+logger = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -15,7 +20,16 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
+    configure_logging(config.server.log_level)
     os.environ["TRAIN_WATCH_CONFIG"] = str(config.config_path)
+    if config.server.shared_token:
+        os.environ["TRAIN_WATCH_SHARED_TOKEN"] = config.server.shared_token
+    logger.info(
+        "Starting Train Watch on %s:%s with log level %s",
+        args.host or config.server.host,
+        args.port or config.server.port,
+        config.server.log_level,
+    )
 
     uvicorn.run(
         "app.main:build_app",

@@ -8,7 +8,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from app.config import AppConfig, NodeConfig, ServerConfig
 from app.main import create_app
-from app.models import ExternalQueueItem, NodeSnapshot
+from app.models import AlertEvent, ExternalQueueItem, NodeSnapshot
 from app.runtime import TrainWatchRuntime, empty_snapshot
 
 
@@ -24,6 +24,9 @@ class DummyCollector:
 
 
 class ApiTests(unittest.TestCase):
+    def _auth_headers(self, runtime: TrainWatchRuntime) -> dict:
+        return {"x-train-watch-token": runtime.config.server.shared_token}
+
     def test_health_requires_token(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             config = AppConfig(
@@ -35,9 +38,23 @@ class ApiTests(unittest.TestCase):
             app = create_app(runtime)
             with TestClient(app) as client:
                 unauthorized = client.get("/api/v1/health")
-                authorized = client.get("/api/v1/health", headers={"x-train-watch-token": "secret"})
+                authorized = client.get("/api/v1/health", headers=self._auth_headers(runtime))
             self.assertEqual(unauthorized.status_code, 401)
             self.assertEqual(authorized.status_code, 200)
+
+    def test_health_allows_access_when_token_is_not_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = AppConfig(
+                server=ServerConfig(shared_token="", sqlite_path=str(Path(tmp_dir) / "test.sqlite3")),
+                nodes=[],
+                config_path=Path(tmp_dir) / "config.yaml",
+            )
+            runtime = TrainWatchRuntime(config, collector=DummyCollector())
+            app = create_app(runtime)
+            with TestClient(app) as client:
+                response = client.get("/api/v1/health")
+
+            self.assertEqual(response.status_code, 200)
 
     def test_add_connection_accepts_password_only_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -51,6 +68,7 @@ class ApiTests(unittest.TestCase):
             with TestClient(app) as client:
                 response = client.post(
                     "/api/v1/connections",
+                    headers=self._auth_headers(runtime),
                     json={
                         "label": "My Box",
                         "host": "gpu.example.com",
@@ -106,6 +124,83 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(payload["type"], "snapshot")
             self.assertIn("snapshot", payload)
 
+    def test_snapshot_endpoint_includes_recent_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = AppConfig(
+                server=ServerConfig(shared_token="secret", sqlite_path=str(Path(tmp_dir) / "test.sqlite3")),
+                nodes=[],
+                config_path=Path(tmp_dir) / "config.yaml",
+            )
+            runtime = TrainWatchRuntime(config, collector=DummyCollector())
+            runtime.recent_events = [
+                AlertEvent(
+                    kind="run_status_changed",
+                    node_id="node-1",
+                    node_label="GPU Box",
+                    run_id="run-1",
+                    run_label="Main Run",
+                    status="failed",
+                    previous_status="running",
+                    at="2026-03-13T10:00:00Z",
+                    message="GPU Box / Main Run: running -> failed",
+                )
+            ]
+            app = create_app(runtime)
+            with TestClient(app) as client:
+                response = client.get("/api/v1/snapshot", headers=self._auth_headers(runtime))
+
+            self.assertEqual(response.status_code, 200)
+            body = response.json()
+            self.assertIn("recent_events", body)
+            self.assertEqual(body["recent_events"][0]["status"], "failed")
+
+    def test_websocket_initial_snapshot_includes_recent_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = AppConfig(
+                server=ServerConfig(shared_token="secret", sqlite_path=str(Path(tmp_dir) / "test.sqlite3")),
+                nodes=[],
+                config_path=Path(tmp_dir) / "config.yaml",
+            )
+            runtime = TrainWatchRuntime(config, collector=DummyCollector())
+            runtime.recent_events = [
+                AlertEvent(
+                    kind="run_status_changed",
+                    node_id="node-1",
+                    node_label="GPU Box",
+                    run_id="run-1",
+                    run_label="Main Run",
+                    status="stalled",
+                    previous_status="running",
+                    at="2026-03-13T10:05:00Z",
+                    message="GPU Box / Main Run: running -> stalled",
+                )
+            ]
+            app = create_app(runtime)
+            with TestClient(app) as client:
+                with client.websocket_connect("/api/v1/stream") as websocket:
+                    websocket.send_json({"type": "auth", "token": "secret"})
+                    payload = websocket.receive_json()
+
+            self.assertEqual(payload["type"], "snapshot")
+            self.assertIn("recent_events", payload["snapshot"])
+            self.assertEqual(payload["snapshot"]["recent_events"][0]["status"], "stalled")
+
+    def test_websocket_stream_allows_missing_auth_when_token_is_not_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = AppConfig(
+                server=ServerConfig(shared_token="", sqlite_path=str(Path(tmp_dir) / "test.sqlite3")),
+                nodes=[],
+                config_path=Path(tmp_dir) / "config.yaml",
+            )
+            runtime = TrainWatchRuntime(config, collector=DummyCollector())
+            app = create_app(runtime)
+            with TestClient(app) as client:
+                with client.websocket_connect("/api/v1/stream") as websocket:
+                    payload = websocket.receive_json()
+
+            self.assertEqual(payload["type"], "snapshot")
+            self.assertIn("snapshot", payload)
+
     def test_add_connection_persists_queue_probe_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             sqlite_path = str(Path(tmp_dir) / "test.sqlite3")
@@ -120,6 +215,7 @@ class ApiTests(unittest.TestCase):
             with TestClient(app) as client:
                 response = client.post(
                     "/api/v1/connections",
+                    headers=self._auth_headers(runtime),
                     json={
                         "label": "Queue Aware Box",
                         "host": "gpu.example.com",
@@ -153,6 +249,7 @@ class ApiTests(unittest.TestCase):
             with TestClient(app) as client:
                 first = client.post(
                     "/api/v1/connections",
+                    headers=self._auth_headers(runtime),
                     json={
                         "label": "My Box",
                         "host": "gpu.example.com",
@@ -164,6 +261,7 @@ class ApiTests(unittest.TestCase):
                 )
                 second = client.post(
                     "/api/v1/connections",
+                    headers=self._auth_headers(runtime),
                     json={
                         "label": "My Box Again",
                         "host": "gpu.example.com",
@@ -191,6 +289,7 @@ class ApiTests(unittest.TestCase):
                 with TestClient(app) as client:
                     response = client.post(
                         "/api/v1/connections",
+                        headers=self._auth_headers(runtime),
                         json={
                             "label": "Alias Box",
                             "host": "gpu-lab-a",
@@ -205,6 +304,65 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(body["item"]["host"], "gpu-lab-a")
             self.assertEqual(body["item"]["user"], "")
             self.assertEqual(len(runtime.config.nodes), 1)
+
+    def test_add_connection_rejects_password_for_local_ssh_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = AppConfig(
+                server=ServerConfig(sqlite_path=str(Path(tmp_dir) / "test.sqlite3")),
+                nodes=[],
+                config_path=Path(tmp_dir) / "config.yaml",
+            )
+            runtime = TrainWatchRuntime(config, collector=DummyCollector())
+            app = create_app(runtime)
+            with patch("app.api_inputs.ssh_config_alias_exists", return_value=True):
+                with TestClient(app) as client:
+                    response = client.post(
+                        "/api/v1/connections",
+                        headers=self._auth_headers(runtime),
+                        json={
+                            "label": "Alias Box",
+                            "host": "gpu-lab-a",
+                            "port": 22,
+                            "user": "",
+                            "password": "secret-password",
+                            "runs": [],
+                        },
+                    )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("password auth is not supported", response.json()["detail"])
+
+    def test_add_connection_rejects_unknown_parser(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = AppConfig(
+                server=ServerConfig(sqlite_path=str(Path(tmp_dir) / "test.sqlite3")),
+                nodes=[],
+                config_path=Path(tmp_dir) / "config.yaml",
+            )
+            runtime = TrainWatchRuntime(config, collector=DummyCollector())
+            app = create_app(runtime)
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/v1/connections",
+                    headers=self._auth_headers(runtime),
+                    json={
+                        "label": "Parser Box",
+                        "host": "gpu.example.com",
+                        "port": 22,
+                        "user": "ubuntu",
+                        "password": "secret",
+                        "runs": [
+                            {
+                                "label": "Main Run",
+                                "log_path": "/tmp/train.log",
+                                "parser": "unknown-parser",
+                            }
+                        ],
+                    },
+                )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("parser must be one of", response.json()["detail"])
 
     def test_ssh_aliases_endpoint_returns_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -224,7 +382,7 @@ class ApiTests(unittest.TestCase):
                 "identityfile": "~/.ssh/id_ed25519",
             }]):
                 with TestClient(app) as client:
-                    response = client.get("/api/v1/ssh-aliases")
+                    response = client.get("/api/v1/ssh-aliases", headers=self._auth_headers(runtime))
 
             self.assertEqual(response.status_code, 200)
             body = response.json()
@@ -255,6 +413,7 @@ class ApiTests(unittest.TestCase):
             with TestClient(app) as client:
                 created = client.post(
                     "/api/v1/jobs",
+                    headers=self._auth_headers(runtime),
                     json={
                         "node_id": "node-1",
                         "owner": "alice",
@@ -264,9 +423,12 @@ class ApiTests(unittest.TestCase):
                         "workdir": "/workspace/project",
                     },
                 )
-                listed = client.get("/api/v1/jobs")
+                listed = client.get("/api/v1/jobs", headers=self._auth_headers(runtime))
                 job_id = created.json()["item"]["id"]
-                canceled = client.delete(f"/api/v1/jobs/{job_id}")
+                canceled = client.delete(
+                    f"/api/v1/jobs/{job_id}",
+                    headers=self._auth_headers(runtime),
+                )
 
             self.assertEqual(created.status_code, 200)
             self.assertEqual(listed.status_code, 200)
@@ -323,7 +485,7 @@ class ApiTests(unittest.TestCase):
                         external_queue_source="slurm",
                     )
                 ]
-                listed = client.get("/api/v1/jobs")
+                listed = client.get("/api/v1/jobs", headers=self._auth_headers(runtime))
 
             self.assertEqual(listed.status_code, 200)
             body = listed.json()
@@ -346,6 +508,7 @@ class ApiTests(unittest.TestCase):
             with TestClient(app) as client:
                 response = client.post(
                     "/api/v1/connections",
+                    headers=self._auth_headers(runtime),
                     json={
                         "label": "Persistent Box",
                         "host": "gpu.example.com",
@@ -388,6 +551,7 @@ class ApiTests(unittest.TestCase):
             with TestClient(app) as client:
                 response = client.post(
                     "/api/v1/connections",
+                    headers=self._auth_headers(runtime),
                     json={
                         "label": "Persistent Box",
                         "host": "gpu.example.com",
@@ -427,6 +591,7 @@ class ApiTests(unittest.TestCase):
                 with TestClient(app) as client:
                     response = client.post(
                         "/api/v1/connections",
+                        headers=self._auth_headers(runtime),
                         json={
                             "label": "Alias Box",
                             "host": "gpu-lab-a",
@@ -467,6 +632,7 @@ class ApiTests(unittest.TestCase):
             with TestClient(app) as client:
                 created = client.post(
                     "/api/v1/connections",
+                    headers=self._auth_headers(runtime),
                     json={
                         "label": "Disposable Box",
                         "host": "gpu.example.com",
@@ -477,7 +643,10 @@ class ApiTests(unittest.TestCase):
                     },
                 )
                 node_id = created.json()["item"]["id"]
-                deleted = client.delete(f"/api/v1/connections/{node_id}")
+                deleted = client.delete(
+                    f"/api/v1/connections/{node_id}",
+                    headers=self._auth_headers(runtime),
+                )
             self.assertEqual(created.status_code, 200)
             self.assertEqual(deleted.status_code, 200)
 

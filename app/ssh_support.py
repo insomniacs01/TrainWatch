@@ -77,10 +77,15 @@ def build_system_ssh_command(
     remote_command: str,
     ssh_binary: Optional[str] = None,
     config_path: Optional[Path] = None,
+    host_key_policy: str = "accept-new",
+    known_hosts_path: Optional[Path] = None,
+    control_path: Optional[Path] = None,
+    control_persist_seconds: int = 300,
 ) -> List[str]:
     binary = ssh_binary or shutil.which("ssh") or "ssh"
     path = Path(config_path or DEFAULT_SSH_CONFIG_PATH).expanduser()
     host_is_alias = ssh_config_alias_exists(node.host, path)
+    strict_host_key_checking = "accept-new" if host_key_policy == "accept-new" else "yes"
 
     command = [
         binary,
@@ -89,9 +94,22 @@ def build_system_ssh_command(
         "-o",
         "ConnectTimeout=15",
         "-o",
-        "StrictHostKeyChecking=no",
+        f"StrictHostKeyChecking={strict_host_key_checking}",
         "-T",
     ]
+    if known_hosts_path:
+        command.extend(["-o", f"UserKnownHostsFile={Path(known_hosts_path).expanduser()}"])
+    if control_path:
+        command.extend(
+            [
+                "-o",
+                "ControlMaster=auto",
+                "-o",
+                f"ControlPersist={max(1, int(control_persist_seconds or 300))}",
+                "-o",
+                f"ControlPath={Path(control_path).expanduser()}",
+            ]
+        )
     if path.exists():
         command.extend(["-F", str(path)])
     if node.key_path:
@@ -100,5 +118,7 @@ def build_system_ssh_command(
         command.extend(["-l", node.user])
     if (not host_is_alias) or int(node.port or 22) != 22:
         command.extend(["-p", str(max(1, int(node.port or 22)))])
-    command.extend([node.host, remote_command])
+    command.append(node.host)
+    if remote_command:
+        command.append(remote_command)
     return command

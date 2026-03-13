@@ -1,10 +1,12 @@
 import asyncio
+from copy import deepcopy
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from .collector import Collector
-from .config import AppConfig, NodeConfig, node_from_persisted_dict, node_to_dict
+from .collector import Collector, count_busy_gpus
+from .config import AppConfig, NodeConfig, finalize_server_config, node_from_persisted_dict, node_to_dict
 from .job_queue import (
     ACTIVE_QUEUE_STATUSES,
     LAUNCHED_QUEUE_STATUSES,
@@ -21,6 +23,12 @@ from .storage import SQLiteStore
 
 
 QUEUE_START_TIMEOUT_SECONDS = 180
+SSH_OFFLINE_FAILURE_THRESHOLD = 2
+IMMEDIATE_OFFLINE_ERROR_MARKERS = (
+    "password was not persisted",
+    "password auth is not supported",
+)
+logger = logging.getLogger(__name__)
 
 
 def empty_snapshot() -> AppSnapshot:
@@ -71,11 +79,13 @@ class WebSocketHub:
 class TrainWatchRuntime:
     def __init__(self, config: AppConfig, collector: Optional[Collector] = None) -> None:
         self.config = config
+        self.config.server = finalize_server_config(self.config.server)
         self.collector = collector or Collector(config)
         self.store = SQLiteStore(config.server.sqlite_path, config.server.retention_days)
         self.hub = WebSocketHub()
         self.snapshot = empty_snapshot()
         self.recent_events: List[AlertEvent] = []
+        self._node_consecutive_ssh_failures: Dict[str, int] = {}
         self._persisted_node_ids: set = set()
         self._restore_persisted_nodes()
         self.queue_jobs: List[QueueJob] = [queue_job_from_dict(item) for item in self.store.list_queue_jobs()]
@@ -110,6 +120,7 @@ class TrainWatchRuntime:
             try:
                 await self.refresh_once()
             except Exception as exc:
+                logger.exception("Background refresh failed")
                 await self.hub.broadcast(
                     {
                         "type": "error",
@@ -174,6 +185,7 @@ class TrainWatchRuntime:
     def _summary_for_nodes(self, nodes: List[NodeSnapshot]) -> Dict[str, Any]:
         runs = [run for node in nodes for run in node.runs]
         gpus = [gpu for node in nodes for gpu in node.gpus]
+        external_items = [item for node in nodes for item in node.external_queue]
         cpu_values = [float(node.metrics.get("cpu_usage_percent", 0.0)) for node in nodes if node.metrics]
         memory_percent_values = [float(node.metrics.get("memory_used_percent", 0.0)) for node in nodes if node.metrics]
         disk_percent_values = [float(node.metrics.get("disk_used_percent", 0.0)) for node in nodes if node.metrics]
@@ -187,12 +199,105 @@ class TrainWatchRuntime:
             "runs_running": sum(1 for run in runs if run.status == "running"),
             "runs_alerting": sum(1 for run in runs if run.status in ("failed", "stalled")),
             "gpus_total": len(gpus),
-            "gpus_busy": sum(1 for gpu in gpus if (gpu.utilization_gpu or 0) >= 10),
+            "gpus_busy": count_busy_gpus(gpus),
+            "external_queue_total": len(external_items),
+            "external_queue_queued": sum(1 for item in external_items if item.status == "queued"),
+            "external_queue_starting": sum(1 for item in external_items if item.status == "starting"),
+            "external_queue_running": sum(1 for item in external_items if item.status == "running"),
             "cpu_usage_avg": float(sum(cpu_values) / len(cpu_values)) if cpu_values else 0.0,
             "memory_used_percent_avg": float(sum(memory_percent_values) / len(memory_percent_values)) if memory_percent_values else 0.0,
             "disk_used_percent_avg": float(sum(disk_percent_values) / len(disk_percent_values)) if disk_percent_values else 0.0,
             "memory_used_mb_total": float(sum(memory_used_values)) if memory_used_values else 0.0,
         }
+
+    def _is_immediate_offline_error(self, error: str) -> bool:
+        normalized = (error or "").strip().lower()
+        return any(marker in normalized for marker in IMMEDIATE_OFFLINE_ERROR_MARKERS)
+
+    def _diff_events(
+        self,
+        previous_snapshot: Optional[AppSnapshot],
+        current_snapshot: AppSnapshot,
+    ) -> List[AlertEvent]:
+        if previous_snapshot is None:
+            return []
+        previous_map: Dict[Tuple[str, str], str] = {}
+        for node in previous_snapshot.nodes:
+            for run in node.runs:
+                previous_map[(node.id, run.id)] = run.status
+
+        events: List[AlertEvent] = []
+        for node in current_snapshot.nodes:
+            for run in node.runs:
+                key = (node.id, run.id)
+                previous_status = previous_map.get(key, "")
+                if previous_status in {"", "connecting"}:
+                    continue
+                if previous_status != run.status:
+                    events.append(
+                        AlertEvent(
+                            kind="run_status_changed",
+                            node_id=node.id,
+                            node_label=node.label,
+                            run_id=run.id,
+                            run_label=run.label,
+                            status=run.status,
+                            previous_status=previous_status,
+                            at=current_snapshot.generated_at,
+                            message="%s / %s: %s → %s"
+                            % (node.label, run.label, previous_status, run.status),
+                        )
+                    )
+        return events
+
+    def _stabilize_node_snapshot(
+        self,
+        current_node: NodeSnapshot,
+        previous_node: Optional[NodeSnapshot],
+    ) -> NodeSnapshot:
+        if current_node.status != "offline":
+            self._node_consecutive_ssh_failures.pop(current_node.id, None)
+            return current_node
+
+        if (
+            previous_node is None
+            or previous_node.status in {"offline", "connecting"}
+            or self._is_immediate_offline_error(current_node.error)
+        ):
+            return current_node
+
+        failures = self._node_consecutive_ssh_failures.get(current_node.id, 0) + 1
+        self._node_consecutive_ssh_failures[current_node.id] = failures
+        if failures >= SSH_OFFLINE_FAILURE_THRESHOLD:
+            return current_node
+
+        preserved = deepcopy(previous_node)
+        preserved.status = "degraded"
+        preserved.error = (
+            "SSH 采集暂时失败，已保留上次成功数据（第 %s 次连续失败）：%s"
+            % (failures, current_node.error or "远端连接短暂中断")
+        )
+        return preserved
+
+    def _stabilize_snapshot(
+        self,
+        current_snapshot: AppSnapshot,
+        previous_snapshot: Optional[AppSnapshot],
+    ) -> AppSnapshot:
+        previous_nodes = {node.id: node for node in previous_snapshot.nodes} if previous_snapshot else {}
+        stabilized_nodes = [
+            self._stabilize_node_snapshot(node, previous_nodes.get(node.id))
+            for node in current_snapshot.nodes
+        ]
+        active_node_ids = {node.id for node in current_snapshot.nodes}
+        stale_node_ids = [node_id for node_id in self._node_consecutive_ssh_failures if node_id not in active_node_ids]
+        for node_id in stale_node_ids:
+            self._node_consecutive_ssh_failures.pop(node_id, None)
+        return AppSnapshot(
+            generated_at=current_snapshot.generated_at,
+            summary=self._summary_for_nodes(stabilized_nodes),
+            nodes=stabilized_nodes,
+        )
 
     def _set_placeholder_node(self, node: NodeConfig) -> None:
         placeholder = self._placeholder_snapshot_for_node(node)
@@ -317,7 +422,7 @@ class TrainWatchRuntime:
         await self.hub.broadcast(
             {
                 "type": "snapshot",
-                "snapshot": self.snapshot.to_dict(),
+                "snapshot": self.snapshot_dict(),
                 "events": [],
             }
         )
@@ -344,6 +449,13 @@ class TrainWatchRuntime:
         job.error = "Waiting for first poll after launch"
         self._attach_job_run(job)
         self._persist_queue_job(job)
+        logger.info(
+            "Queued job launched: id=%s node=%s gpus=%s remote_pid=%s",
+            job.id,
+            node.id,
+            ",".join(str(item) for item in gpu_indices),
+            job.remote_pid,
+        )
 
     def _reconcile_queue_job_states(self, snapshot: AppSnapshot) -> None:
         for job in self.queue_jobs:
@@ -363,6 +475,7 @@ class TrainWatchRuntime:
                     job.error = "Queued job did not appear in monitoring within the startup timeout"
                     self._detach_job_run(job)
                     self._persist_queue_job(job)
+                    logger.warning("Queued job startup timed out: id=%s node=%s", job.id, job.node_id)
                 continue
 
             job.run_status = run_snapshot.status
@@ -378,6 +491,7 @@ class TrainWatchRuntime:
                 job.error = ""
                 self._detach_job_run(job)
                 self._persist_queue_job(job)
+                logger.info("Queued job completed: id=%s node=%s", job.id, job.node_id)
                 continue
             if run_snapshot.status == "failed":
                 job.status = "failed"
@@ -385,6 +499,7 @@ class TrainWatchRuntime:
                 job.error = run_snapshot.error or "Queued job failed"
                 self._detach_job_run(job)
                 self._persist_queue_job(job)
+                logger.warning("Queued job failed: id=%s node=%s error=%s", job.id, job.node_id, job.error)
                 continue
             if run_snapshot.status == "idle":
                 job.status = "failed"
@@ -392,6 +507,7 @@ class TrainWatchRuntime:
                 job.error = run_snapshot.error or "Queued job exited without a completion marker"
                 self._detach_job_run(job)
                 self._persist_queue_job(job)
+                logger.warning("Queued job exited without completion marker: id=%s node=%s", job.id, job.node_id)
                 continue
             if run_snapshot.status == "unknown":
                 age_seconds = self._seconds_since(job.started_at or job.updated_at, snapshot.generated_at)
@@ -401,6 +517,7 @@ class TrainWatchRuntime:
                     job.error = run_snapshot.error or "Queued job became unreachable during startup"
                     self._detach_job_run(job)
                     self._persist_queue_job(job)
+                    logger.warning("Queued job became unreachable during startup: id=%s node=%s", job.id, job.node_id)
                     continue
                 job.error = run_snapshot.error or job.error
                 self._persist_queue_job(job)
@@ -414,7 +531,7 @@ class TrainWatchRuntime:
             if node.transport != "ssh":
                 continue
             node_snapshot = self._find_snapshot_node(node.id, snapshot)
-            if node_snapshot is None or node_snapshot.status == "offline" or not node_snapshot.gpus:
+            if node_snapshot is None or node_snapshot.status != "online" or not node_snapshot.gpus:
                 continue
             reserved = [gpu_index for job in active_by_node.get(node.id, []) for gpu_index in job.allocated_gpu_indices]
             free_gpu_indices = select_free_gpu_indices(node_snapshot, reserved)
@@ -425,9 +542,13 @@ class TrainWatchRuntime:
                 try:
                     await self._launch_queue_job(job, node, allocated, snapshot.generated_at)
                 except Exception as exc:
+                    job.status = "failed"
+                    job.run_status = "failed"
+                    job.finished_at = snapshot.generated_at
                     job.updated_at = snapshot.generated_at
                     job.error = str(exc)
                     self._persist_queue_job(job)
+                    logger.warning("Queued job launch failed: id=%s node=%s error=%s", job.id, node.id, job.error)
                     break
                 free_gpu_indices = free_gpu_indices[job.gpu_count :]
 
@@ -440,19 +561,19 @@ class TrainWatchRuntime:
         async with lock:
             if not self.config.nodes:
                 self.snapshot = empty_snapshot()
-                payload = {"type": "snapshot", "snapshot": self.snapshot.to_dict(), "events": []}
+                payload = {"type": "snapshot", "snapshot": self.snapshot_dict(), "events": []}
             else:
-                snapshot, events = await self.collector.poll_once(
-                    self.snapshot if self.snapshot.nodes else None,
-                    self.config.nodes,
-                )
+                previous_snapshot = self.snapshot if self.snapshot.nodes else None
+                snapshot, _events = await self.collector.poll_once(previous_snapshot, self.config.nodes)
+                snapshot = self._stabilize_snapshot(snapshot, previous_snapshot)
+                events = self._diff_events(previous_snapshot, snapshot)
                 self.snapshot = snapshot
                 self.recent_events = (events + self.recent_events)[:20]
                 self.store.persist_snapshot(snapshot)
                 await self._sync_queue_jobs(snapshot)
                 payload = {
                     "type": "snapshot",
-                    "snapshot": snapshot.to_dict(),
+                    "snapshot": self.snapshot_dict(),
                     "events": [event.to_dict() for event in events],
                 }
         await self.hub.broadcast(payload)
@@ -469,6 +590,7 @@ class TrainWatchRuntime:
             self.config.nodes.append(node)
             self._persist_node(node)
             self._set_placeholder_node(node)
+            logger.info("Connection added: id=%s label=%s host=%s", node.id, node.label, node.host)
         await self._broadcast_snapshot()
         asyncio.create_task(self.refresh_once())
         return self.connection_summaries()[-1]
@@ -496,6 +618,7 @@ class TrainWatchRuntime:
                 self._persist_queue_job(job)
         if removed is None:
             return False
+        logger.info("Connection removed: id=%s label=%s host=%s", removed.id, removed.label, removed.host)
         if removed.id in self._persisted_node_ids:
             self.store.delete_persisted_node(removed.id)
             self._persisted_node_ids.discard(removed.id)
@@ -522,6 +645,13 @@ class TrainWatchRuntime:
             self.queue_jobs.append(job)
             self.queue_jobs.sort(key=lambda item: (item.created_at, item.id))
             self._persist_queue_job(job)
+            logger.info(
+                "Queued job enqueued: id=%s node=%s owner=%s gpus=%s",
+                job.id,
+                job.node_id,
+                job.owner,
+                job.gpu_count,
+            )
             queue_positions = {}
             grouped = self._queue_jobs_by_node(statuses={"queued"})
             for group_items in grouped.values():
@@ -545,6 +675,7 @@ class TrainWatchRuntime:
             job.updated_at = job.finished_at
             job.error = "Canceled before launch"
             self._persist_queue_job(job)
+            logger.info("Queued job canceled: id=%s node=%s", job.id, job.node_id)
             item = self._job_item(job)
         return item
 
@@ -638,8 +769,12 @@ class TrainWatchRuntime:
         if not self.snapshot.nodes and self.config.nodes:
             latest = self.store.latest_snapshot()
             if latest:
-                return latest
-        return self.snapshot.to_dict()
+                payload = dict(latest)
+                payload["recent_events"] = [event.to_dict() for event in self.recent_events]
+                return payload
+        payload = self.snapshot.to_dict()
+        payload["recent_events"] = [event.to_dict() for event in self.recent_events]
+        return payload
 
     def history_range_defaults(self) -> Dict[str, str]:
         end = datetime.now(timezone.utc)

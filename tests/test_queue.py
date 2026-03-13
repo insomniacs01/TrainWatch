@@ -32,6 +32,30 @@ class FakePool:
         return None
 
 
+class FailingThenSucceedingPool:
+    def __init__(self) -> None:
+        self.commands = []
+        self.calls = 0
+
+    def execute(self, node, command, timeout):
+        self.calls += 1
+        self.commands.append(command)
+        if self.calls == 1:
+            return "", "launch exploded", 1
+        payload = {
+            "remote_pid": 5000 + self.calls,
+            "script_path": f"/home/ubuntu/.train-watch/jobs/job-{self.calls}/run.sh",
+            "log_path": f"/home/ubuntu/.train-watch/jobs/job-{self.calls}/train-watch.log",
+        }
+        return json.dumps(payload), "", 0
+
+    def close_all(self):
+        return None
+
+    def close_node(self, node):
+        return None
+
+
 class LaunchingCollector:
     def __init__(self) -> None:
         self.pool = FakePool()
@@ -181,6 +205,161 @@ class StaticCollector:
         return None
 
 
+class FailingLaunchCollector:
+    def __init__(self) -> None:
+        self.pool = FailingThenSucceedingPool()
+
+    async def poll_once(self, previous_snapshot, nodes):
+        node = nodes[0]
+        snapshot = AppSnapshot(
+            generated_at="2026-03-12T00:00:01Z",
+            summary={
+                "nodes_total": 1,
+                "nodes_online": 1,
+                "nodes_degraded": 0,
+                "nodes_offline": 0,
+                "runs_total": len(node.runs),
+                "runs_running": 0,
+                "runs_alerting": 0,
+                "gpus_total": 2,
+                "gpus_busy": 0,
+            },
+            nodes=[
+                NodeSnapshot(
+                    id=node.id,
+                    label=node.label,
+                    host=node.host,
+                    hostname=node.host,
+                    status="online",
+                    error="",
+                    collected_at="2026-03-12T00:00:01Z",
+                    loadavg=[0.1, 0.1, 0.1],
+                    metrics={"gpu_process_count": 0.0},
+                    gpus=[
+                        GPUInfo(0, "gpu-0", "RTX 3090", 0.0, 0.0, 24576.0, 40.0, 20.0, 350.0, []),
+                        GPUInfo(1, "gpu-1", "RTX 3090", 0.0, 0.0, 24576.0, 41.0, 21.0, 350.0, []),
+                    ],
+                    gpu_processes=[],
+                    runs=[],
+                )
+            ],
+        )
+        return snapshot, []
+
+    def close(self):
+        return None
+
+
+class FlakySSHCollector:
+    def __init__(self) -> None:
+        self.pool = FakePool()
+        self.calls = 0
+
+    async def poll_once(self, previous_snapshot, nodes):
+        self.calls += 1
+        phase = self.calls
+        node = nodes[0]
+        if phase == 1:
+            return self._online_snapshot(node), []
+        return self._offline_snapshot(node, phase), []
+
+    def _online_snapshot(self, node):
+        return AppSnapshot(
+            generated_at="2026-03-12T00:00:01Z",
+            summary={
+                "nodes_total": 1,
+                "nodes_online": 1,
+                "nodes_degraded": 0,
+                "nodes_offline": 0,
+                "runs_total": 1,
+                "runs_running": 1,
+                "runs_alerting": 0,
+                "gpus_total": 2,
+                "gpus_busy": 1,
+            },
+            nodes=[
+                NodeSnapshot(
+                    id=node.id,
+                    label=node.label,
+                    host=node.host,
+                    hostname=node.host,
+                    status="online",
+                    error="",
+                    collected_at="2026-03-12T00:00:01Z",
+                    loadavg=[0.1, 0.1, 0.1],
+                    metrics={"gpu_process_count": 1.0},
+                    gpus=[
+                        GPUInfo(0, "gpu-0", "RTX 3090", 92.0, 2048.0, 24576.0, 62.0, 200.0, 350.0, []),
+                        GPUInfo(1, "gpu-1", "RTX 3090", 0.0, 0.0, 24576.0, 40.0, 20.0, 350.0, []),
+                    ],
+                    gpu_processes=[],
+                    runs=[
+                        RunSnapshot(
+                            id="run-1",
+                            label="Main Run",
+                            parser="auto",
+                            status="running",
+                            error="",
+                            log_path="/tmp/train.log",
+                            log_exists=True,
+                            log_age_seconds=3,
+                            last_update_at="2026-03-12T00:00:01Z",
+                            last_log_line="step 1/10",
+                        )
+                    ],
+                )
+            ],
+        )
+
+    def _offline_snapshot(self, node, phase):
+        return AppSnapshot(
+            generated_at="2026-03-12T00:00:0%sZ" % phase,
+            summary={
+                "nodes_total": 1,
+                "nodes_online": 0,
+                "nodes_degraded": 0,
+                "nodes_offline": 1,
+                "runs_total": 1,
+                "runs_running": 0,
+                "runs_alerting": 0,
+                "gpus_total": 0,
+                "gpus_busy": 0,
+            },
+            nodes=[
+                NodeSnapshot(
+                    id=node.id,
+                    label=node.label,
+                    host=node.host,
+                    hostname=node.host,
+                    status="offline",
+                    error="kex_exchange_identification: read: Connection reset by peer",
+                    collected_at="2026-03-12T00:00:0%sZ" % phase,
+                    loadavg=[],
+                    metrics={},
+                    gpus=[],
+                    gpu_processes=[],
+                    runs=[
+                        RunSnapshot(
+                            id="run-1",
+                            label="Main Run",
+                            parser="auto",
+                            status="unknown",
+                            error="kex_exchange_identification: read: Connection reset by peer",
+                            log_path="/tmp/train.log",
+                            log_exists=False,
+                            log_age_seconds=None,
+                            last_update_at="",
+                            last_log_line="",
+                        )
+                    ],
+                )
+            ],
+        )
+
+    def close(self):
+        return None
+
+
 class QueueRuntimeTests(unittest.TestCase):
     def _config(self, sqlite_path: str) -> AppConfig:
         return AppConfig(
@@ -269,6 +448,110 @@ class QueueRuntimeTests(unittest.TestCase):
                 statuses = [item["status"] for item in runtime.job_summaries()["items"]]
                 self.assertEqual(statuses, ["queued", "queued"])
                 self.assertEqual(len(collector.pool.commands), 0)
+
+        asyncio.run(scenario())
+
+    def test_launch_failure_marks_head_failed_and_unblocks_following_jobs(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                config = self._config(str(Path(tmp_dir) / "queue.sqlite3"))
+                collector = FailingLaunchCollector()
+                runtime = TrainWatchRuntime(config, collector=collector)
+                first = QueueJob(
+                    id="job-1",
+                    node_id="node-1",
+                    node_label="GPU Box",
+                    owner="alice",
+                    label="Broken Job",
+                    command="python broken.py",
+                    gpu_count=1,
+                    created_at="2026-03-12T00:00:00Z",
+                    updated_at="2026-03-12T00:00:00Z",
+                )
+                second = QueueJob(
+                    id="job-2",
+                    node_id="node-1",
+                    node_label="GPU Box",
+                    owner="bob",
+                    label="Healthy Job",
+                    command="python train_ok.py",
+                    gpu_count=1,
+                    created_at="2026-03-12T00:00:01Z",
+                    updated_at="2026-03-12T00:00:01Z",
+                )
+                with patch("app.runtime.asyncio.create_task", side_effect=self._no_task):
+                    await runtime.enqueue_job(first)
+                    await runtime.enqueue_job(second)
+
+                await runtime.refresh_once()
+                items = {item["id"]: item for item in runtime.job_summaries()["items"]}
+                self.assertEqual(items["job-1"]["status"], "failed")
+                self.assertEqual(items["job-1"]["run_status"], "failed")
+                self.assertEqual(items["job-1"]["finished_at"], "2026-03-12T00:00:01Z")
+                self.assertIn("launch exploded", items["job-1"]["error"])
+                self.assertEqual(items["job-2"]["status"], "queued")
+
+                await runtime.refresh_once()
+                items = {item["id"]: item for item in runtime.job_summaries()["items"]}
+                self.assertEqual(items["job-2"]["status"], "starting")
+                self.assertEqual(len(collector.pool.commands), 2)
+
+        asyncio.run(scenario())
+
+    def test_transient_ssh_failure_keeps_previous_snapshot_and_skips_launch(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                config = self._config(str(Path(tmp_dir) / "queue.sqlite3"))
+                config.nodes[0].runs = []
+                collector = FlakySSHCollector()
+                runtime = TrainWatchRuntime(config, collector=collector)
+
+                await runtime.refresh_once()
+                self.assertEqual(runtime.snapshot.nodes[0].status, "online")
+
+                job = QueueJob(
+                    id="job-1",
+                    node_id="node-1",
+                    node_label="GPU Box",
+                    owner="alice",
+                    label="SFT",
+                    command="torchrun train.py",
+                    gpu_count=1,
+                    created_at="2026-03-12T00:00:00Z",
+                    updated_at="2026-03-12T00:00:00Z",
+                )
+                with patch("app.runtime.asyncio.create_task", side_effect=self._no_task):
+                    await runtime.enqueue_job(job)
+
+                await runtime.refresh_once()
+                node = runtime.snapshot.nodes[0]
+                self.assertEqual(node.status, "degraded")
+                self.assertIn("保留上次成功数据", node.error)
+                self.assertEqual(len(node.gpus), 2)
+                self.assertEqual(runtime.snapshot.summary["nodes_offline"], 0)
+                self.assertEqual(runtime.snapshot.summary["nodes_degraded"], 1)
+                self.assertEqual(runtime.job_summaries()["items"][0]["status"], "queued")
+                self.assertEqual(len(collector.pool.commands), 0)
+                self.assertEqual(runtime.recent_events, [])
+
+        asyncio.run(scenario())
+
+    def test_consecutive_ssh_failures_eventually_mark_node_offline(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                config = self._config(str(Path(tmp_dir) / "queue.sqlite3"))
+                collector = FlakySSHCollector()
+                runtime = TrainWatchRuntime(config, collector=collector)
+
+                await runtime.refresh_once()
+                await runtime.refresh_once()
+                self.assertEqual(runtime.snapshot.nodes[0].status, "degraded")
+
+                await runtime.refresh_once()
+                node = runtime.snapshot.nodes[0]
+                self.assertEqual(node.status, "offline")
+                self.assertIn("Connection reset by peer", node.error)
+                self.assertEqual(runtime.snapshot.summary["nodes_offline"], 1)
 
         asyncio.run(scenario())
 

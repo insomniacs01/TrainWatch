@@ -1,11 +1,21 @@
+import { localizeMessage } from "./formatters.js";
+
+export class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function responseError(response) {
   try {
     const contentType = response.headers.get("content-type") || "";
     if (contentType.includes("application/json")) {
       const payload = await response.json();
-      return payload.detail || payload.error || JSON.stringify(payload);
+      return localizeMessage(payload.detail || payload.error || JSON.stringify(payload));
     }
-    return await response.text();
+    return localizeMessage(await response.text());
   } catch (_error) {
     return `HTTP ${response.status}`;
   }
@@ -20,7 +30,7 @@ export function createApiClient(getToken) {
   async function apiGet(path) {
     const response = await fetch(path, { headers: authHeaders() });
     if (!response.ok) {
-      throw new Error(await responseError(response));
+      throw new ApiError(await responseError(response), response.status);
     }
     return response.json();
   }
@@ -32,7 +42,7 @@ export function createApiClient(getToken) {
       body: JSON.stringify(body),
     });
     if (!response.ok) {
-      throw new Error(await responseError(response));
+      throw new ApiError(await responseError(response), response.status);
     }
     return response.json();
   }

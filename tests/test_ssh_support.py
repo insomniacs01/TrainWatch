@@ -37,6 +37,7 @@ class SSHSupportTests(unittest.TestCase):
     def test_build_system_ssh_command_uses_alias_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_path = Path(tmp_dir) / "config"
+            known_hosts_path = Path(tmp_dir) / "known_hosts"
             config_path.write_text(
                 "Host gpu-lab-a\n  HostName gpu.example.com\n  User ubuntu\n  Port 10800\n",
                 encoding="utf-8",
@@ -51,29 +52,87 @@ class SSHSupportTests(unittest.TestCase):
                 password="",
                 runs=[],
             )
-            command = build_system_ssh_command(node, "hostname", ssh_binary="ssh", config_path=config_path)
+            command = build_system_ssh_command(
+                node,
+                "hostname",
+                ssh_binary="ssh",
+                config_path=config_path,
+                known_hosts_path=known_hosts_path,
+            )
             self.assertIn("gpu-lab-a", command)
             self.assertNotIn("-p", command)
             self.assertNotIn("-l", command)
+            self.assertIn("StrictHostKeyChecking=accept-new", command)
+            self.assertIn(f"UserKnownHostsFile={known_hosts_path}", command)
 
     def test_build_system_ssh_command_for_direct_host_includes_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            known_hosts_path = Path(tmp_dir) / "known_hosts"
+            node = NodeConfig(
+                id="node-direct",
+                label="Direct Node",
+                host="gpu.example.com",
+                port=10800,
+                user="ubuntu",
+                key_path="/tmp/id_ed25519",
+                password="",
+                runs=[],
+            )
+            command = build_system_ssh_command(
+                node,
+                "hostname",
+                ssh_binary="ssh",
+                host_key_policy="strict",
+                known_hosts_path=known_hosts_path,
+            )
+            self.assertIn("-p", command)
+            self.assertIn("10800", command)
+            self.assertIn("-l", command)
+            self.assertIn("ubuntu", command)
+            self.assertIn("-i", command)
+            self.assertIn("/tmp/id_ed25519", command)
+            self.assertIn("StrictHostKeyChecking=yes", command)
+            self.assertIn(f"UserKnownHostsFile={known_hosts_path}", command)
+
+    def test_build_system_ssh_command_can_enable_connection_multiplexing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            control_path = Path(tmp_dir) / "mux.sock"
+            node = NodeConfig(
+                id="node-direct",
+                label="Direct Node",
+                host="gpu.example.com",
+                port=10800,
+                user="ubuntu",
+                key_path="",
+                password="",
+                runs=[],
+            )
+            command = build_system_ssh_command(
+                node,
+                "hostname",
+                ssh_binary="ssh",
+                control_path=control_path,
+                control_persist_seconds=180,
+            )
+            self.assertIn("ControlMaster=auto", command)
+            self.assertIn("ControlPersist=180", command)
+            self.assertIn(f"ControlPath={control_path}", command)
+            self.assertEqual(command[-1], "hostname")
+
+    def test_build_system_ssh_command_omits_empty_remote_command(self) -> None:
         node = NodeConfig(
             id="node-direct",
             label="Direct Node",
             host="gpu.example.com",
-            port=10800,
+            port=22,
             user="ubuntu",
-            key_path="/tmp/id_ed25519",
+            key_path="",
             password="",
             runs=[],
         )
-        command = build_system_ssh_command(node, "hostname", ssh_binary="ssh")
-        self.assertIn("-p", command)
-        self.assertIn("10800", command)
-        self.assertIn("-l", command)
-        self.assertIn("ubuntu", command)
-        self.assertIn("-i", command)
-        self.assertIn("/tmp/id_ed25519", command)
+        command = build_system_ssh_command(node, "", ssh_binary="ssh")
+        self.assertEqual(command[-1], "gpu.example.com")
+        self.assertNotIn("", command)
 
 
 if __name__ == "__main__":

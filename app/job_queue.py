@@ -22,8 +22,8 @@ def queue_job_from_dict(payload: Dict[str, Any]) -> QueueJob:
         id=str(payload.get("id", "")).strip(),
         node_id=str(payload.get("node_id", "")).strip(),
         node_label=str(payload.get("node_label", "")).strip(),
-        owner=str(payload.get("owner", "Anonymous")).strip() or "Anonymous",
-        label=str(payload.get("label", "Queued Job")).strip() or "Queued Job",
+        owner=str(payload.get("owner", "匿名")).strip() or "匿名",
+        label=str(payload.get("label", "队列任务")).strip() or "队列任务",
         command=str(payload.get("command", "")).strip(),
         gpu_count=max(1, int(payload.get("gpu_count", 1))),
         created_at=str(payload.get("created_at", "")).strip() or utc_now_iso(),
@@ -47,7 +47,7 @@ def queue_job_from_dict(payload: Dict[str, Any]) -> QueueJob:
 def summarize_command(command: str) -> str:
     cleaned = " ".join((command or "").strip().split())
     if not cleaned:
-        return "Queued Job"
+        return "队列任务"
     if len(cleaned) <= 72:
         return cleaned
     return f"{cleaned[:69]}..."
@@ -58,7 +58,7 @@ def build_run_config(job: QueueJob) -> RunConfig:
     process_match = job.process_match or re.escape(job.script_path or f"train-watch/jobs/{job.id}/run.sh")
     return RunConfig(
         id=run_id,
-        label=f"[Queue] {job.owner} · {job.label}",
+        label=f"[队列] {job.owner} · {job.label}",
         log_path=job.log_path or None,
         process_match=process_match,
         parser=job.parser or "auto",

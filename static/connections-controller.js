@@ -18,12 +18,15 @@ export function createConnectionsController({
   closeConnectDrawer,
   onConnectionsChanged,
   refreshAll,
+  withAuthRecovery = null,
 } = {}) {
+  const guard = withAuthRecovery || (async (task) => task());
+
   function renderAliasOptions() {
     if (!els.aliasSelect || !els.aliasMeta) return;
     const aliases = state.sshAliases || [];
     const previousValue = els.aliasSelect.value;
-    els.aliasSelect.innerHTML = [`<option value="">选择一个 Host alias（可选）</option>`]
+    els.aliasSelect.innerHTML = [`<option value="">选择一个 SSH 别名（可选）</option>`]
       .concat(aliases.map((item) => `<option value="${safeAttr(item.alias)}">${safeText(item.alias)}</option>`))
       .join("");
     if (aliases.some((item) => item.alias === previousValue)) {
@@ -31,7 +34,7 @@ export function createConnectionsController({
     }
     const selected = aliases.find((item) => item.alias === els.aliasSelect.value);
     if (!aliases.length) {
-      els.aliasMeta.textContent = "没有在当前环境里发现可用的 SSH aliases；你仍然可以手动输入 Host / User / Password。";
+      els.aliasMeta.textContent = "当前环境里没有发现可用的 SSH 别名；你仍然可以手动输入主机、用户和密码。";
       return;
     }
     els.aliasMeta.textContent = aliasDescription(selected || aliases[0]);
@@ -41,17 +44,17 @@ export function createConnectionsController({
     state.connectSubmitting = submitting;
     if (els.submitConnectBtn) {
       els.submitConnectBtn.disabled = submitting;
-      els.submitConnectBtn.textContent = submitting ? "连接中..." : "连接并开始监控";
+      els.submitConnectBtn.textContent = submitting ? "连接中..." : "开始连接并监控";
     }
   }
 
   async function loadSshAliases(showSuccessBanner = false) {
     try {
-      const payload = await apiGet("/api/v1/ssh-aliases");
+      const payload = await guard(() => apiGet("/api/v1/ssh-aliases"));
       state.sshAliases = payload.items || [];
       renderAliasOptions();
       if (showSuccessBanner) {
-        showBanner(`已加载 ${state.sshAliases.length} 个 SSH aliases`, "info");
+        showBanner(`已加载 ${state.sshAliases.length} 个 SSH 别名`, "info");
       }
     } catch (error) {
       state.sshAliases = [];
@@ -66,7 +69,7 @@ export function createConnectionsController({
     const alias = els.aliasSelect?.value || "";
     const item = state.sshAliases.find((entry) => entry.alias === alias);
     if (!item) {
-      showBanner("请先选择一个 SSH alias", "error");
+      showBanner("请先选择一个 SSH 别名", "error");
       return;
     }
     document.getElementById("hostInput").value = item.alias;
@@ -76,14 +79,14 @@ export function createConnectionsController({
     document.getElementById("labelInput").value = document.getElementById("labelInput").value || item.alias;
     document.getElementById("passwordInput").value = "";
     els.aliasMeta.textContent = aliasDescription(item);
-    showBanner(`已把 ${item.alias} 填入表单`, "info");
+    showBanner(`已把 ${item.alias} 填入基础信息`, "info");
   }
 
   async function removeConnection(nodeId, label) {
     if (!nodeId) return;
     if (!window.confirm(`确认移除 ${label || nodeId} 吗？`)) return;
     try {
-      await apiJson("DELETE", `/api/v1/connections/${encodeURIComponent(nodeId)}`);
+      await guard(() => apiJson("DELETE", `/api/v1/connections/${encodeURIComponent(nodeId)}`));
       showBanner(`已移除 ${label || nodeId}`, "info");
       await refreshAll?.();
     } catch (error) {
@@ -100,6 +103,11 @@ export function createConnectionsController({
     const logGlob = String(form.get("log_glob") || "").trim();
     const processMatch = String(form.get("process_match") || "").trim();
     const runLabel = String(form.get("run_label") || "Main Run").trim() || "Main Run";
+    if (processMatch && !logPath && !logGlob) {
+      showBanner("填写进程匹配规则时，请同时提供日志路径或日志通配路径。", "error");
+      setConnectSubmitting(false);
+      return;
+    }
     const runs = [];
     if (logPath || logGlob || processMatch) {
       runs.push({
@@ -122,18 +130,18 @@ export function createConnectionsController({
       runs,
     };
     if (!payload.host) {
-      showBanner("Host 不能为空", "error");
+      showBanner("主机不能为空", "error");
       setConnectSubmitting(false);
       return;
     }
     try {
-      await apiJson("POST", "/api/v1/connections", payload);
+      await guard(() => apiJson("POST", "/api/v1/connections", payload));
       closeConnectDrawer?.();
       els.connectForm.reset();
       document.getElementById("portInput").value = 22;
       document.getElementById("stallInput").value = 900;
       renderAliasOptions();
-      showBanner(`已将 ${payload.host} 加入监控队列，正在后台建立 SSH 连接并采集首轮状态。`, "info");
+      showBanner(`已开始连接 ${payload.host}，正在后台采集首轮状态。`, "info");
       await onConnectionsChanged?.();
     } catch (error) {
       showBanner(error.message || String(error), "error");

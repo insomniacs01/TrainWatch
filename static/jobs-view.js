@@ -1,5 +1,5 @@
 import { escapeAttr, escapeHtml } from "./html.js";
-import { fmtDateTime, noteChip, statusClass } from "./formatters.js";
+import { fmtDateTime, localizeMessage, noteChip, statusClass, statusLabel } from "./formatters.js";
 
 function safeText(value) {
   return escapeHtml(value ?? "");
@@ -12,11 +12,11 @@ function safeAttr(value) {
 export function renderJobsPanel({ summary = {}, jobs = [], summaryEl, listEl, onCancel } = {}) {
   if (summaryEl) {
     summaryEl.innerHTML = [
-      noteChip("queued", summary.jobs_queued ?? 0),
-      noteChip("starting", summary.jobs_starting ?? 0),
-      noteChip("running", summary.jobs_running ?? 0),
-      noteChip("failed", summary.jobs_failed ?? 0),
-      noteChip("gpu", summary.gpu_requested_active ?? 0),
+      noteChip("排队中", summary.jobs_queued ?? 0),
+      noteChip("启动中", summary.jobs_starting ?? 0),
+      noteChip("运行中", summary.jobs_running ?? 0),
+      noteChip("失败", summary.jobs_failed ?? 0),
+      noteChip("申请 GPU", summary.gpu_requested_active ?? 0),
     ].join("");
   }
   if (!listEl) return;
@@ -28,23 +28,23 @@ export function renderJobsPanel({ summary = {}, jobs = [], summaryEl, listEl, on
     <article class="job-item">
       <div class="run-row">
         <strong>${safeText(job.label)}</strong>
-        <span class="status-pill ${safeAttr(statusClass(job.status))}">${safeText(job.status || "unknown")}</span>
+        <span class="status-pill ${safeAttr(statusClass(job.status))}">${safeText(statusLabel(job.status))}</span>
       </div>
-      <p class="subtle">${safeText(job.owner || "Anonymous")} · ${safeText(job.node_label || job.node_id)}</p>
+      <p class="subtle">${safeText(job.owner || "匿名")} · ${safeText(job.node_label || job.node_id)}</p>
       <div class="job-meta">
         <div class="note-row">
-          ${noteChip("GPU", job.gpu_count)}
-          ${job.queue_position ? noteChip("pos", job.queue_position) : ""}
-          ${job.run_status ? noteChip("run", job.run_status) : ""}
-          ${job.allocated_gpu_indices?.length ? noteChip("alloc", job.allocated_gpu_indices.join(",")) : ""}
+          ${noteChip("GPU 数", job.gpu_count)}
+          ${job.queue_position ? noteChip("排队顺位", job.queue_position) : ""}
+          ${job.run_status ? noteChip("运行状态", statusLabel(job.run_status)) : ""}
+          ${job.allocated_gpu_indices?.length ? noteChip("分配 GPU", job.allocated_gpu_indices.join(",")) : ""}
         </div>
         <div class="note-row">
-          ${noteChip("created", fmtDateTime(job.created_at))}
-          ${job.started_at ? noteChip("started", fmtDateTime(job.started_at)) : ""}
-          ${job.finished_at ? noteChip("finished", fmtDateTime(job.finished_at)) : ""}
+          ${noteChip("提交时间", fmtDateTime(job.created_at))}
+          ${job.started_at ? noteChip("开始时间", fmtDateTime(job.started_at)) : ""}
+          ${job.finished_at ? noteChip("结束时间", fmtDateTime(job.finished_at)) : ""}
         </div>
-        ${job.workdir ? `<div class="note-row">${noteChip("cwd", job.workdir)}</div>` : ""}
-        ${job.error ? `<div class="log-tail">${safeText(job.error)}</div>` : ""}
+        ${job.workdir ? `<div class="note-row">${noteChip("工作目录", job.workdir)}</div>` : ""}
+        ${job.error ? `<div class="log-tail">${safeText(localizeMessage(job.error))}</div>` : ""}
       </div>
       <code>${safeText(job.command || "")}</code>
       <div class="job-actions">
@@ -63,11 +63,11 @@ export function renderJobsPanel({ summary = {}, jobs = [], summaryEl, listEl, on
 export function renderExternalJobsPanel({ summary = {}, jobs = [], summaryEl, listEl } = {}) {
   if (summaryEl) {
     summaryEl.innerHTML = [
-      noteChip("queued", summary.jobs_queued ?? 0),
-      noteChip("starting", summary.jobs_starting ?? 0),
-      noteChip("running", summary.jobs_running ?? 0),
-      noteChip("failed", summary.jobs_failed ?? 0),
-      noteChip("gpu", summary.gpu_requested_active ?? 0),
+      noteChip("排队中", summary.jobs_queued ?? 0),
+      noteChip("启动中", summary.jobs_starting ?? 0),
+      noteChip("运行中", summary.jobs_running ?? 0),
+      noteChip("失败", summary.jobs_failed ?? 0),
+      noteChip("申请 GPU", summary.gpu_requested_active ?? 0),
     ].join("");
   }
   if (!listEl) return;
@@ -78,19 +78,19 @@ export function renderExternalJobsPanel({ summary = {}, jobs = [], summaryEl, li
   listEl.innerHTML = jobs.map((job) => `
     <article class="job-item">
       <div class="run-row">
-        <strong>${safeText(job.label || job.id || "External Job")}</strong>
-        <span class="status-pill ${safeAttr(statusClass(job.status))}">${safeText(job.status || "unknown")}</span>
+        <strong>${safeText(job.label || job.id || "外部任务")}</strong>
+        <span class="status-pill ${safeAttr(statusClass(job.status))}">${safeText(statusLabel(job.status))}</span>
       </div>
-      <p class="subtle">${safeText(job.owner || "Unknown")} · ${safeText(job.node_label || job.node_id)} · ${safeText(job.source || "external")}</p>
+      <p class="subtle">${safeText(job.owner || "未知用户")} · ${safeText(job.node_label || job.node_id)} · ${safeText(job.source || "外部来源")}</p>
       <div class="job-meta">
         <div class="note-row">
-          ${noteChip("GPU", job.gpu_count ?? "--")}
-          ${job.submitted_at ? noteChip("submitted", fmtDateTime(job.submitted_at)) : ""}
-          ${job.raw_status ? noteChip("raw", job.raw_status) : ""}
+          ${noteChip("GPU 数", job.gpu_count ?? "--")}
+          ${job.submitted_at ? noteChip("提交时间", fmtDateTime(job.submitted_at)) : ""}
+          ${job.raw_status ? noteChip("原始状态", job.raw_status) : ""}
         </div>
         <div class="note-row">
-          ${job.workdir ? noteChip("cwd", job.workdir) : ""}
-          ${job.reason ? noteChip("reason", job.reason) : ""}
+          ${job.workdir ? noteChip("工作目录", job.workdir) : ""}
+          ${job.reason ? noteChip("原因", job.reason) : ""}
         </div>
       </div>
       ${job.command ? `<code>${safeText(job.command)}</code>` : ""}

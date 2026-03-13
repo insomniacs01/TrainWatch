@@ -29,6 +29,7 @@ class GPUInfo:
     power_draw_w: Optional[float]
     power_limit_w: Optional[float]
     processes: List[GPUProcess] = field(default_factory=list)
+    is_busy: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
