@@ -5,10 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .models import AppSnapshot, AlertEvent
-
-
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+from .time_utils import utc_now_iso
 
 
 class SQLiteStore:

@@ -81,6 +81,26 @@ class ProductizationTests(unittest.TestCase):
             self.assertEqual(payload["mode"], "personal")
             self.assertEqual(snapshot.status_code, 200)
 
+    def test_personal_mode_keeps_mutating_endpoints_available_without_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            runtime = make_runtime(tmp_dir, DummyCollector(), enable_user_auth=False, bootstrap_admin=False)
+            app = create_app(runtime)
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/v1/connections",
+                    json={
+                        "label": "My Box",
+                        "host": "gpu.example.com",
+                        "port": 22,
+                        "user": "ubuntu",
+                        "password": "secret-password",
+                        "runs": [],
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["item"]["label"], "My Box")
+
     def test_auth_config_reports_team_bootstrap_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             runtime = make_runtime(tmp_dir, DummyCollector(), enable_user_auth=True, bootstrap_admin=False)

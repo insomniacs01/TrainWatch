@@ -1,4 +1,6 @@
 import { createApiClient } from "./api-client.js";
+import { createAlertsController } from "./alerts-controller.js";
+import { createAuthController } from "./auth-controller.js";
 import { createConnectionsController } from "./connections-controller.js";
 import { drawChart } from "./charts.js";
 import { applyFoldState } from "./fold-state.js";
@@ -13,7 +15,7 @@ import {
   localizeMessage,
   statusLabel,
 } from "./formatters.js";
-import { persistToken, restoreToken } from "./token-store.js";
+import { restoreToken } from "./token-store.js";
 
 const state = {
   snapshot: null,
@@ -101,58 +103,54 @@ const els = {
 
 const { apiGet, apiJson } = createApiClient(() => state.token);
 
-const MODE_LABELS = {
-  personal: "个人模式",
-  "personal-token": "令牌模式",
-  team: "团队模式",
-};
+let stream = null;
 
-function currentModeLabel() {
-  return MODE_LABELS[state.authConfig?.mode] || "访问模式";
-}
+const authController = createAuthController({
+  state,
+  els,
+  apiGet,
+  apiJson,
+  showBanner,
+  localizeMessage,
+  fetchSnapshot: () => fetchSnapshot(),
+  loadSshAliases: () => loadSshAliases(),
+  connectStream: () => stream?.connect(),
+  disconnectStream: () => stream?.disconnect(),
+  getOverlayElements: () => [els.detailDrawer],
+});
 
-function updateModeBadge() {
-  const mode = state.authConfig?.mode || "personal";
-  const modeLabel = currentModeLabel();
-  if (els.authModeBadge) {
-    els.authModeBadge.textContent = modeLabel;
-  }
-  if (!els.modeBadge) return;
-  if (mode === "personal") {
-    els.modeBadge.textContent = "当前模式：个人模式 · 无需登录";
-    return;
-  }
-  if (mode === "team") {
-    els.modeBadge.textContent = state.authConfig?.bootstrap_required
-      ? "当前模式：团队模式 · 首次创建管理员"
-      : "当前模式：团队模式 · 账号登录";
-    return;
-  }
-  els.modeBadge.textContent = "当前模式：令牌模式 · 输入访问令牌";
-}
+const {
+  enterApp,
+  fetchAuthConfig,
+  handleAuthSubmit,
+  handleBootstrapAdmin,
+  loadSessionState,
+  logoutCurrentSession,
+  setAuthError,
+  setAuthMode,
+  showAuthGate,
+  syncOverlayState,
+  updateTokenButtonVisibility,
+  withAuthRecovery,
+} = authController;
 
-async function fetchAuthConfig() {
-  const response = await fetch("/api/v1/auth/config");
-  if (!response.ok) {
-    throw new Error(`Failed to load auth config: HTTP ${response.status}`);
-  }
-  const payload = await response.json();
-  state.authConfig = payload;
-  const methods = Array.isArray(payload.login_methods) ? payload.login_methods : [];
-  if (payload.bootstrap_required) {
-    state.authMode = "password";
-  } else if (methods.includes(state.authMode)) {
-    state.authMode = state.authMode;
-  } else if (payload.user_auth_enabled) {
-    state.authMode = "password";
-  } else if (payload.shared_token_enabled) {
-    state.authMode = "token";
-  }
-  updateModeBadge();
-  return payload;
-}
+const alertsController = createAlertsController({
+  state,
+  els,
+  showBanner,
+  renderEventsList,
+  alertMessage,
+  localizeMessage,
+  statusLabel,
+});
 
-const stream = createSnapshotStream({
+const {
+  handleIncomingEvents,
+  renderAlertFeed,
+  syncAlertFeed,
+} = alertsController;
+
+stream = createSnapshotStream({
   getToken: () => state.token,
   onSnapshot: (payload) => {
     syncAlertFeed(payload.snapshot, payload.events || []);
@@ -187,31 +185,6 @@ function clearBanner(kind = null) {
   if (kind && els.banner.dataset.kind !== kind) return;
   els.banner.classList.add("hidden");
   els.banner.dataset.kind = "";
-}
-
-function updateTokenButtonVisibility() {
-  if (!els.tokenBtn) return;
-  const authRequired = Boolean(state.authConfig?.auth_required);
-  els.tokenBtn.classList.toggle("hidden", !authRequired);
-  if (!authRequired) return;
-  updateModeBadge();
-  if (state.currentUser?.source === "session") {
-    els.tokenBtn.textContent = `账户 · ${state.currentUser.display_name || state.currentUser.username}`;
-    return;
-  }
-  if (state.currentUser?.source === "shared_token") {
-    els.tokenBtn.textContent = "令牌访问";
-    return;
-  }
-  if (state.authConfig?.bootstrap_required) {
-    els.tokenBtn.textContent = "团队注册";
-    return;
-  }
-  if (state.authConfig?.mode === "team") {
-    els.tokenBtn.textContent = "团队登录";
-    return;
-  }
-  els.tokenBtn.textContent = state.token ? "更换令牌" : "输入令牌";
 }
 
 function renderJumpOptions(snapshot) {
@@ -277,278 +250,6 @@ function resetJumpSelection() {
   });
 }
 
-function isAuthError(error) {
-  return Number(error?.status || 0) === 401;
-}
-
-function setAuthError(message = "") {
-  if (!els.authError) return;
-  els.authError.textContent = message;
-  els.authError.classList.toggle("hidden", !message);
-}
-
-function setAuthMode(mode) {
-  const methods = state.authConfig?.login_methods || [];
-  const bootstrapRequired = Boolean(state.authConfig?.bootstrap_required);
-  if (!methods.includes(mode) && methods.length) {
-    state.authMode = methods[0];
-  } else {
-    state.authMode = mode;
-  }
-  if (bootstrapRequired) {
-    state.authMode = "password";
-  }
-
-  const isToken = state.authMode === "token";
-  const isBootstrap = bootstrapRequired && !isToken;
-  const isTeamMode = state.authConfig?.mode === "team";
-  const canSwitch = !bootstrapRequired && methods.length > 1;
-
-  els.authUsernameRow?.classList.toggle("hidden", isToken);
-  els.authDisplayNameRow?.classList.toggle("hidden", !isBootstrap);
-  els.authPasswordRow?.classList.toggle("hidden", isToken);
-  els.authTokenRow?.classList.toggle("hidden", !isToken);
-  els.authSwitchBtn?.classList.toggle("hidden", !canSwitch);
-  els.authRegisterBtn?.classList.toggle("hidden", !isBootstrap);
-  els.authSubmitBtn?.classList.toggle("hidden", isBootstrap);
-
-  if (els.authSwitchBtn) {
-    els.authSwitchBtn.textContent = isToken ? "改用账号密码" : "改用访问令牌";
-  }
-  if (els.authPasswordInput) {
-    els.authPasswordInput.autocomplete = isBootstrap ? "new-password" : "current-password";
-  }
-  if (els.authTitle) {
-    if (isBootstrap) {
-      els.authTitle.textContent = "首次使用：创建管理员账号";
-    } else if (isToken) {
-      els.authTitle.textContent = isTeamMode ? "团队模式：输入访问令牌" : "输入访问令牌";
-    } else if (isTeamMode) {
-      els.authTitle.textContent = "团队模式登录";
-    } else {
-      els.authTitle.textContent = "登录 Train Watch";
-    }
-  }
-  if (els.authDescription) {
-    if (isBootstrap) {
-      els.authDescription.textContent = "当前是团队模式，系统里还没有任何账号。先创建一个管理员账号，创建完成后会自动进入系统。";
-    } else if (isToken) {
-      els.authDescription.textContent = "当前是令牌模式，请输入部署时配置的访问令牌后进入。";
-    } else if (isTeamMode) {
-      els.authDescription.textContent = "当前是团队模式，请使用账号和密码登录。首次部署时，先由页面创建第一个管理员账号。";
-    } else {
-      els.authDescription.textContent = "请输入登录信息继续。";
-    }
-  }
-  if (els.authSubmitBtn) {
-    els.authSubmitBtn.textContent = isToken ? "进入系统" : "登录";
-  }
-  if (els.authRegisterBtn) {
-    els.authRegisterBtn.textContent = "创建管理员并进入";
-  }
-}
-
-function showAuthGate(message = "") {
-  if (!state.authConfig?.auth_required) {
-    els.authGate?.classList.add("hidden");
-    document.body.classList.remove("overlay-open");
-    return;
-  }
-  updateModeBadge();
-  setAuthMode(state.authMode);
-  setAuthError(message);
-  els.authGate?.classList.remove("hidden");
-  document.body.classList.add("overlay-open");
-  window.setTimeout(() => {
-    if (state.authConfig?.bootstrap_required) {
-      els.authUsernameInput?.focus();
-    } else if (state.authMode === "password") {
-      els.authUsernameInput?.focus();
-    } else {
-      els.authTokenInput?.focus();
-    }
-  }, 0);
-}
-
-function hideAuthGate() {
-  setAuthError("");
-  els.authGate?.classList.add("hidden");
-  syncOverlayState();
-}
-
-function syncOverlayState() {
-  const hasOverlay = [els.authGate, els.detailDrawer].some(
-    (element) => element && !element.classList.contains("hidden")
-  );
-  document.body.classList.toggle("overlay-open", hasOverlay);
-}
-
-function promptForToken(message = "设置 Train Watch 令牌") {
-  const nextToken = window.prompt(message, state.token || "");
-  if (nextToken === null) return false;
-  state.token = nextToken.trim();
-  persistToken(state.token);
-  updateTokenButtonVisibility();
-  stream.connect();
-  return Boolean(state.token);
-}
-
-async function loginWithPassword(message = "Login to Train Watch") {
-  const username = window.prompt(`${message}\nUsername`, state.currentUser?.username || "");
-  if (username === null) return false;
-  const password = window.prompt("Password", "");
-  if (password === null) return false;
-  const response = await fetch("/api/v1/session/login", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ username: username.trim(), password }),
-  });
-  let payload = {};
-  try {
-    payload = await response.json();
-  } catch (_error) {}
-  if (!response.ok) {
-    throw new Error(localizeMessage(payload.detail || payload.error || `HTTP ${response.status}`));
-  }
-  state.token = String(payload.token || "").trim();
-  persistToken(state.token);
-  await loadSessionState({ silent: true });
-  updateTokenButtonVisibility();
-  stream.connect();
-  return Boolean(state.token);
-}
-
-async function loginWithTokenValue(token) {
-  state.token = String(token || "").trim();
-  persistToken(state.token);
-  await loadSessionState({ silent: true });
-  updateTokenButtonVisibility();
-  return Boolean(state.token);
-}
-
-async function logoutCurrentSession() {
-  if (!state.token) return;
-  try {
-    await apiJson("POST", "/api/v1/session/logout", {});
-  } catch (_error) {
-    // ignore logout failures and clear locally
-  }
-  state.token = "";
-  state.sessionInfo = null;
-  state.currentUser = null;
-  persistToken("");
-  updateTokenButtonVisibility();
-  stream.disconnect();
-}
-
-async function loadSessionState({ silent = false } = {}) {
-  try {
-    const payload = await apiGet("/api/v1/session/me");
-    state.sessionInfo = payload;
-    state.currentUser = payload?.user || null;
-    updateTokenButtonVisibility();
-    return payload;
-  } catch (error) {
-    if (!silent && !isAuthError(error)) {
-      showBanner(error.message || String(error), "error");
-    }
-    if (isAuthError(error)) {
-      state.currentUser = null;
-    }
-    state.sessionInfo = state.sessionInfo || { auth_required: isAuthError(error), user_auth_enabled: false };
-    updateTokenButtonVisibility();
-    throw error;
-  }
-}
-
-async function withAuthRecovery(task) {
-  try {
-    return await task();
-  } catch (error) {
-    if (!isAuthError(error)) {
-      throw error;
-    }
-    showAuthGate(error.message || "Please sign in to continue.");
-    throw error;
-  }
-}
-
-async function enterApp() {
-  hideAuthGate();
-  await fetchSnapshot();
-  await loadSshAliases().catch(() => {});
-  stream.connect();
-}
-
-async function handleBootstrapAdmin() {
-  const username = String(els.authUsernameInput?.value || "").trim();
-  const password = String(els.authPasswordInput?.value || "");
-  const displayName = String(els.authDisplayNameInput?.value || "").trim();
-  if (!username || !password) {
-    setAuthError("请先填写管理员账号和密码。");
-    return;
-  }
-  const response = await fetch("/api/v1/session/bootstrap-admin", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ username, password, display_name: displayName }),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    setAuthError(localizeMessage(payload.detail || payload.error || `HTTP ${response.status}`));
-    return;
-  }
-  state.token = String(payload.token || "").trim();
-  persistToken(state.token);
-  await fetchAuthConfig();
-  await loadSessionState({ silent: true }).catch(() => {});
-  updateTokenButtonVisibility();
-  await enterApp();
-}
-
-async function handleAuthSubmit(event) {
-  event.preventDefault();
-  setAuthError("");
-  try {
-    if (state.authConfig?.bootstrap_required && state.authMode !== "token") {
-      await handleBootstrapAdmin();
-      return;
-    }
-    if (state.authMode === "password") {
-      const username = String(els.authUsernameInput?.value || "").trim();
-      const password = String(els.authPasswordInput?.value || "");
-      if (!username || !password) {
-        setAuthError("Username and password are required.");
-        return;
-      }
-      const response = await fetch("/api/v1/session/login", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        setAuthError(localizeMessage(payload.detail || payload.error || `HTTP ${response.status}`));
-        return;
-      }
-      state.token = String(payload.token || "").trim();
-      persistToken(state.token);
-    } else {
-      const token = String(els.authTokenInput?.value || "").trim();
-      if (!token) {
-        setAuthError("Access token is required.");
-        return;
-      }
-      await loginWithTokenValue(token);
-    }
-    await loadSessionState({ silent: true }).catch(() => {});
-    updateTokenButtonVisibility();
-    await enterApp();
-  } catch (error) {
-    setAuthError(error.message || String(error));
-  }
-}
-
 const jobsController = createJobsController({
   state,
   els,
@@ -589,119 +290,6 @@ const {
   removeConnection,
   submitConnection,
 } = connectionsController;
-
-function updateAlertBadge() {
-  const badgeCount = state.currentAlerts.length > 0 ? state.currentAlerts.length : state.unreadAlerts;
-  els.alertBadge.textContent = String(badgeCount);
-  els.alertBadge.classList.toggle("hidden", badgeCount <= 0);
-}
-
-function playAlertTone() {
-  try {
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    const oscillator = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-    oscillator.connect(gain);
-    gain.connect(audioContext.destination);
-    oscillator.type = "sine";
-    oscillator.frequency.value = 880;
-    gain.gain.value = 0.03;
-    oscillator.start();
-    oscillator.stop(audioContext.currentTime + 0.15);
-  } catch (_error) {}
-}
-
-function buildCurrentAlerts(snapshot) {
-  if (!snapshot) return [];
-  if (Array.isArray(snapshot.current_alerts) && snapshot.current_alerts.length) {
-    return snapshot.current_alerts.slice(0, 20);
-  }
-  const items = [];
-  const sortOrder = { failed: 0, offline: 1, stalled: 2, degraded: 3 };
-  (snapshot.nodes || []).forEach((node) => {
-    const runs = Array.isArray(node.runs) ? node.runs : [];
-    const runAlerts = runs.filter((run) => ["failed", "stalled"].includes(run.status));
-    runAlerts.forEach((run) => {
-      items.push({
-        kind: "current_run_alert",
-        is_current: true,
-        node_id: node.id,
-        node_label: node.label,
-        run_id: run.id,
-        run_label: run.label,
-        status: run.status,
-        at: run.last_update_at || node.collected_at || snapshot.generated_at,
-        message: `${node.label} / ${run.label}: ${statusLabel(run.status)}${run.error ? ` · ${localizeMessage(run.error)}` : ""}`,
-      });
-    });
-
-    const needsNodeAlert = node.status === "offline" || (node.status === "degraded" && !runAlerts.length && node.error);
-    if (!needsNodeAlert) return;
-    items.push({
-      kind: "current_node_alert",
-      is_current: true,
-      node_id: node.id,
-      node_label: node.label,
-      run_id: "",
-      run_label: "",
-      status: node.status,
-      at: node.collected_at || snapshot.generated_at,
-      message: `${node.label}: ${statusLabel(node.status)}${node.error ? ` · ${localizeMessage(node.error)}` : ""}`,
-    });
-  });
-
-  return items
-    .sort((left, right) => {
-      const leftPriority = sortOrder[left.status] ?? 99;
-      const rightPriority = sortOrder[right.status] ?? 99;
-      if (leftPriority !== rightPriority) return leftPriority - rightPriority;
-      return String(right.at || "").localeCompare(String(left.at || ""));
-    })
-    .slice(0, 20);
-}
-
-function alertIdentity(item) {
-  if (!item) return "";
-  if (item.run_id) return `run:${item.node_id}:${item.run_id}:${item.status}`;
-  return `node:${item.node_id}:${item.status}`;
-}
-
-function syncAlertFeed(snapshot, fallbackEvents = []) {
-  const recentEvents = Array.isArray(snapshot?.recent_events) ? snapshot.recent_events : [];
-  state.recentEvents = recentEvents.length ? recentEvents : (fallbackEvents.length ? fallbackEvents.slice(0, 20) : []);
-  state.currentAlerts = buildCurrentAlerts(snapshot);
-
-  const merged = [];
-  const seen = new Set();
-  state.currentAlerts.concat(state.recentEvents).forEach((item) => {
-    const key = alertIdentity(item);
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    merged.push(item);
-  });
-  state.alertFeed = merged.slice(0, 20);
-}
-
-function renderAlertFeed() {
-  renderEventsList(els.eventsList, state.alertFeed);
-  updateAlertBadge();
-}
-
-function handleIncomingEvents(events) {
-  if (!events || !events.length) {
-    updateAlertBadge();
-    return;
-  }
-  const alerting = events.filter((event) => ["completed", "failed", "stalled"].includes(event.status));
-  if (!alerting.length) {
-    updateAlertBadge();
-    return;
-  }
-  state.unreadAlerts += alerting.length;
-  updateAlertBadge();
-  showBanner(alertMessage(alerting[0]), alerting[0].status === "completed" ? "info" : "error", { kind: "event" });
-  playAlertTone();
-}
 
 function renderSnapshot(snapshot) {
   state.snapshot = snapshot;
@@ -909,9 +497,7 @@ async function bootstrap() {
       await enterApp();
       return;
     } catch (_error) {
-      state.token = "";
-      state.currentUser = null;
-      persistToken("");
+      await logoutCurrentSession();
     }
   }
   showAuthGate();

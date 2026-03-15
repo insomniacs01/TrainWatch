@@ -16,30 +16,30 @@
     <div id="authGate" class="auth-gate hidden" aria-live="polite">
       <div class="auth-card">
         <p class="eyebrow">Train Watch</p>
-        <span id="authModeBadge" class="status-pill">当前模式</span>
-        <h2 id="authTitle">正在检查登录方式</h2>
-        <p id="authDescription" class="subtle">正在载入登录方式，请稍候。</p>
+        <span id="authModeBadge" class="status-pill">Current Mode</span>
+        <h2 id="authTitle">Checking sign-in options</h2>
+        <p id="authDescription" class="subtle">Loading sign-in options, please wait.</p>
         <form id="authForm" class="auth-form">
           <label id="authUsernameRow">
-            <span>账号</span>
+            <span>Username</span>
             <input id="authUsernameInput" name="username" autocomplete="username" />
           </label>
           <label id="authDisplayNameRow" class="hidden">
-            <span>显示名称</span>
+            <span>Display Name</span>
             <input id="authDisplayNameInput" name="display_name" autocomplete="nickname" />
           </label>
           <label id="authPasswordRow">
-            <span>密码</span>
+            <span>Password</span>
             <input id="authPasswordInput" name="password" type="password" autocomplete="current-password" />
           </label>
           <label id="authTokenRow" class="hidden">
-            <span>访问令牌</span>
+            <span>Access Token</span>
             <input id="authTokenInput" name="token" type="password" autocomplete="off" />
           </label>
           <div class="auth-actions">
-            <button type="submit" id="authSubmitBtn" class="secondary-button primary-button">登录</button>
-            <button type="button" id="authSwitchBtn" class="secondary-button hidden">改用令牌</button>
-            <button type="button" id="authRegisterBtn" class="secondary-button hidden">创建管理员</button>
+            <button type="submit" id="authSubmitBtn" class="secondary-button primary-button">Sign In</button>
+            <button type="button" id="authSwitchBtn" class="secondary-button hidden">Use Token Instead</button>
+            <button type="button" id="authRegisterBtn" class="secondary-button hidden">Create Admin</button>
           </div>
         </form>
         <p id="authError" class="auth-error hidden"></p>
@@ -50,16 +50,16 @@
       <header class="topbar">
         <div>
           <p class="eyebrow">Train Watch</p>
-          <h1>SSH 训练监控面板</h1>
-          <p class="subtle" id="subtitle">等待第一轮采集...</p>
-          <span id="modeBadge" class="status-pill">当前模式：检测中</span>
+          <h1>SSH Training Dashboard</h1>
+          <p class="subtle" id="subtitle">Waiting for first poll...</p>
+          <span id="modeBadge" class="status-pill">Mode: Checking</span>
         </div>
         <div class="topbar-actions">
-          <button id="connectBtn" class="secondary-button primary-button">连接 SSH</button>
-          <button id="refreshBtn" class="secondary-button">立即刷新</button>
-          <button id="tokenBtn" class="secondary-button">令牌</button>
+          <button id="connectBtn" class="secondary-button primary-button">Connect SSH</button>
+          <button id="refreshBtn" class="secondary-button">Refresh Now</button>
+          <button id="tokenBtn" class="secondary-button">Token</button>
           <button id="alertsBtn" class="secondary-button badge-button">
-            告警
+            Alerts
             <span id="alertBadge" class="badge hidden">0</span>
           </button>
         </div>
@@ -68,19 +68,19 @@
       <section id="banner" class="banner hidden"></section>
 
       <section class="install-card card">
-        <strong>iPhone 主屏幕：</strong>
-        <span>用 Safari 打开后，点“分享 → 添加到主屏幕”。</span>
+        <strong>iPhone Home Screen:</strong>
+        <span>Open in Safari, then tap "Share" -> "Add to Home Screen".</span>
       </section>
 
       <section id="summaryGrid" class="summary-grid"></section>
       <section class="quick-nav card">
         <label class="jump-nav">
-          <span class="kicker">快速跳转</span>
+          <span class="kicker">Quick Jump</span>
           <select id="jumpSelect">
-            <option value="">选择一个区域或节点</option>
+            <option value="">Select a section or node</option>
           </select>
         </label>
-        <p class="subtle quick-nav-hint">告警、GPU 和长列表都支持折叠，减少整页来回翻动。</p>
+        <p class="subtle quick-nav-hint">Alerts, GPU lists, and long sections can all be collapsed to reduce scrolling.</p>
       </section>
 
       <section class="content-grid">
@@ -91,10 +91,10 @@
               <summary class="fold-summary">
                 <div class="fold-title-group">
                   <div>
-                    <p class="eyebrow">告警</p>
-                    <h2>当前告警与最近变化</h2>
+                    <p class="eyebrow">Alerts</p>
+                    <h2>Current Alerts and Recent Changes</h2>
                   </div>
-                  <span class="fold-meta">优先查看</span>
+                  <span class="fold-meta">Review First</span>
                 </div>
                 <span class="fold-caret" aria-hidden="true"></span>
               </summary>
@@ -106,42 +106,42 @@
           <section id="jobsPanel" class="jobs-panel card">
             <div class="panel-header">
               <div>
-                <p class="eyebrow">队列</p>
-                <h2>GPU 队列</h2>
+                <p class="eyebrow">Queue</p>
+                <h2>GPU Queue</h2>
               </div>
             </div>
             <details class="fold-section compact-fold" data-fold-id="panel:job-form">
               <summary class="fold-summary">
                 <div class="fold-title-group">
-                  <strong>新建排队任务</strong>
-                  <span class="fold-meta">表单</span>
+                  <strong>New Queued Job</strong>
+                  <span class="fold-meta">Form</span>
                 </div>
                 <span class="fold-caret" aria-hidden="true"></span>
               </summary>
               <div class="fold-body">
                 <form id="jobForm" class="job-form-grid">
                   <label>
-                    <span>目标连接</span>
+                    <span>Target Connection</span>
                     <select id="jobNodeSelect" name="node_id"></select>
                   </label>
                   <label>
-                    <span>申请 GPU 数</span>
+                    <span>Requested GPU Count</span>
                     <input id="jobGpuCountInput" name="gpu_count" type="number" min="1" value="1" />
                   </label>
                   <label>
-                    <span>提交人</span>
-                    <input id="jobOwnerInput" name="owner" placeholder="例如：alice" />
+                    <span>Owner</span>
+                    <input id="jobOwnerInput" name="owner" placeholder="e.g. Alice" />
                   </label>
                   <label>
-                    <span>任务名</span>
-                    <input id="jobLabelInput" name="label" placeholder="例如：Llama SFT" />
+                    <span>Job Name</span>
+                    <input id="jobLabelInput" name="label" placeholder="e.g. Llama SFT" />
                   </label>
                   <label class="full-span">
-                    <span>工作目录</span>
-                    <input id="jobWorkdirInput" name="workdir" placeholder="例如：/workspace/project（可选）" />
+                    <span>Working Directory</span>
+                    <input id="jobWorkdirInput" name="workdir" placeholder="e.g. /workspace/project (optional)" />
                   </label>
                   <label>
-                    <span>解析器</span>
+                    <span>Parser</span>
                     <select id="jobParserInput" name="parser">
                       <option value="auto">auto</option>
                       <option value="mapanything">mapanything</option>
@@ -150,11 +150,11 @@
                     </select>
                   </label>
                   <label class="full-span">
-                    <span>启动命令</span>
-                    <textarea id="jobCommandInput" name="command" rows="5" placeholder="例如：torchrun --nproc_per_node=2 train.py --config conf.yaml" required></textarea>
+                    <span>Launch Command</span>
+                    <textarea id="jobCommandInput" name="command" rows="5" placeholder="e.g. torchrun --nproc_per_node=2 train.py --config conf.yaml" required></textarea>
                   </label>
                   <div class="full-span form-actions">
-                    <button type="submit" id="submitJobBtn" class="secondary-button primary-button">加入排队</button>
+                    <button type="submit" id="submitJobBtn" class="secondary-button primary-button">Add to Queue</button>
                   </div>
                 </form>
               </div>
@@ -162,8 +162,8 @@
             <details class="fold-section compact-fold" data-fold-id="panel:jobs-current" open>
               <summary class="fold-summary">
                 <div class="fold-title-group">
-                  <strong>当前排队任务</strong>
-                  <span class="fold-meta">本应用提交</span>
+                  <strong>Current Queued Jobs</strong>
+                  <span class="fold-meta">Submitted Here</span>
                 </div>
                 <span class="fold-caret" aria-hidden="true"></span>
               </summary>
@@ -175,8 +175,8 @@
             <details class="fold-section compact-fold" data-fold-id="panel:jobs-external">
               <summary class="fold-summary">
                 <div class="fold-title-group">
-                  <strong>外部排队 / 调度任务</strong>
-                  <span class="fold-meta">Slurm / 自定义探针</span>
+                  <strong>External Queue / Scheduler Jobs</strong>
+                  <span class="fold-meta">Slurm / Custom Probe</span>
                 </div>
                 <span class="fold-caret" aria-hidden="true"></span>
               </summary>
@@ -194,85 +194,85 @@
       <div class="drawer-card connect-card">
         <div class="drawer-header">
           <div>
-            <p class="eyebrow">连接</p>
-            <h2>输入 SSH 信息</h2>
+            <p class="eyebrow">Connect</p>
+            <h2>Enter SSH Details</h2>
           </div>
-          <button id="closeConnectBtn" class="secondary-button">关闭</button>
+          <button id="closeConnectBtn" class="secondary-button">Close</button>
         </div>
         <form id="connectForm" class="form-grid connect-form">
           <section class="full-span alias-picker card">
             <div class="alias-picker-header">
               <div>
-                <strong>从本机 SSH 配置选择</strong>
-                <p class="subtle">自动读取容器或本机里的 <code>~/.ssh/config</code> 别名，尽量少填字段。</p>
+                <strong>Pick from Local SSH Config</strong>
+                <p class="subtle">Read aliases from local/container <code>~/.ssh/config</code> to fill fewer fields.</p>
               </div>
-              <button type="button" id="refreshAliasesBtn" class="secondary-button">刷新别名</button>
+              <button type="button" id="refreshAliasesBtn" class="secondary-button">Refresh Aliases</button>
             </div>
             <div class="alias-picker-controls">
               <select id="aliasSelect">
-                <option value="">选择一个 SSH 别名（可选）</option>
+                <option value="">Select an SSH alias (optional)</option>
               </select>
-              <button type="button" id="applyAliasBtn" class="secondary-button primary-button">填入表单</button>
+              <button type="button" id="applyAliasBtn" class="secondary-button primary-button">Fill Form</button>
             </div>
-            <p id="aliasMeta" class="subtle">还没有加载 SSH 别名。</p>
+            <p id="aliasMeta" class="subtle">SSH aliases have not been loaded yet.</p>
           </section>
           <section class="full-span connect-section card">
             <div class="connect-section-header">
               <div>
-                <strong>快速连接</strong>
-                <p class="subtle">默认只填主机、用户和密码或私钥路径就够了，日志会先自动发现。</p>
+                <strong>Quick Connect</strong>
+                <p class="subtle">Usually host, user, and password or key path are enough; logs can be auto-discovered first.</p>
               </div>
             </div>
             <div class="connect-fields-grid">
               <label>
-                <span>主机或 SSH 别名</span>
-                <input id="hostInput" name="host" placeholder="例如：1.2.3.4、demo.example.com 或 gpu-lab-a" required />
+                <span>Host or SSH Alias</span>
+                <input id="hostInput" name="host" placeholder="e.g. 1.2.3.4, demo.example.com, or gpu-lab-a" required />
               </label>
               <label>
-                <span>端口</span>
+                <span>Port</span>
                 <input id="portInput" name="port" type="number" value="22" />
               </label>
               <label>
-                <span>用户</span>
-                <input id="userInput" name="user" placeholder="直连主机时填写；SSH alias 可留空" />
+                <span>User</span>
+                <input id="userInput" name="user" placeholder="Fill for direct hosts; leave empty for SSH aliases" />
               </label>
               <label>
-                <span>密码</span>
-                <input id="passwordInput" name="password" type="password" placeholder="可直接输入 SSH 密码（可选）" />
+                <span>Password</span>
+                <input id="passwordInput" name="password" type="password" placeholder="Optional SSH password" />
               </label>
               <label class="full-span">
-                <span>私钥路径</span>
-                <input id="keyPathInput" name="key_path" placeholder="例如：~/.ssh/id_ed25519（可选）" />
+                <span>Key Path</span>
+                <input id="keyPathInput" name="key_path" placeholder="e.g. ~/.ssh/id_ed25519 (optional)" />
               </label>
             </div>
             <div class="form-note card connect-helper">
-              <strong>默认推荐</strong>
-              <p class="subtle">先直接连上机器，让系统自动发现训练任务。只有自动发现不稳定时，再展开下面的高级选项补充日志路径或进程规则。</p>
+              <strong>Recommended Default</strong>
+              <p class="subtle">Connect first and let Train Watch auto-discover runs. Only use advanced options if auto-discovery is not stable.</p>
             </div>
             <div class="form-actions">
-              <button type="submit" id="submitConnectBtn" class="secondary-button primary-button">开始连接并监控</button>
+              <button type="submit" id="submitConnectBtn" class="secondary-button primary-button">Start Monitoring</button>
             </div>
           </section>
           <details class="fold-section compact-fold full-span" data-fold-id="panel:connect-advanced">
             <summary class="fold-summary">
               <div class="fold-title-group">
-                <strong>高级选项</strong>
-                <span class="fold-meta">显示名称 / 日志匹配 / 队列探针</span>
+                <strong>Advanced Options</strong>
+                <span class="fold-meta">Display Name / Log Matching / Queue Probe</span>
               </div>
               <span class="fold-caret" aria-hidden="true"></span>
             </summary>
             <div class="fold-body">
               <div class="connect-fields-grid advanced-connect-grid">
                 <label>
-                  <span>显示名称</span>
-                  <input id="labelInput" name="label" placeholder="例如：My 3090 Server" />
+                  <span>Display Name</span>
+                  <input id="labelInput" name="label" placeholder="e.g. My 3090 Server" />
                 </label>
                 <label>
-                  <span>任务名称</span>
-                  <input id="runLabelInput" name="run_label" placeholder="例如：Main Training Run（可选）" />
+                  <span>Run Label</span>
+                  <input id="runLabelInput" name="run_label" placeholder="e.g. Main Training Run (optional)" />
                 </label>
                 <label>
-                  <span>解析器</span>
+                  <span>Parser</span>
                   <select id="parserInput" name="parser">
                     <option value="auto">auto</option>
                     <option value="mapanything">mapanything</option>
@@ -281,29 +281,29 @@
                   </select>
                 </label>
                 <label>
-                  <span>停滞阈值（秒）</span>
+                  <span>Stall Threshold (sec)</span>
                   <input id="stallInput" name="stall_after_seconds" type="number" value="900" />
                 </label>
                 <label class="full-span">
-                  <span>日志路径</span>
-                  <input id="logPathInput" name="log_path" placeholder="例如：/workspace/run/train.log（可选）" />
+                  <span>Log Path</span>
+                  <input id="logPathInput" name="log_path" placeholder="e.g. /workspace/run/train.log (optional)" />
                 </label>
                 <label class="full-span">
-                  <span>日志通配路径</span>
-                  <input id="logGlobInput" name="log_glob" placeholder="例如：/workspace/logs/*/train.log（可选）" />
+                  <span>Log Glob</span>
+                  <input id="logGlobInput" name="log_glob" placeholder="e.g. /workspace/logs/*/train.log (optional)" />
                 </label>
                 <label class="full-span">
-                  <span>进程匹配规则</span>
-                  <input id="processMatchInput" name="process_match" placeholder="例如：torchrun .*train.py（可选）" />
+                  <span>Process Match Rule</span>
+                  <input id="processMatchInput" name="process_match" placeholder="e.g. torchrun .*train.py (optional)" />
                 </label>
                 <label class="full-span">
-                  <span>外部队列探针命令</span>
-                  <input id="queueProbeInput" name="queue_probe_command" placeholder="可选：留空时自动尝试 squeue；也可填自定义命令输出 JSON" />
+                  <span>External Queue Probe</span>
+                  <input id="queueProbeInput" name="queue_probe_command" placeholder="Optional: leave empty to auto-try squeue, or provide a command that outputs JSON" />
                 </label>
               </div>
               <div class="form-note card connect-helper">
-                <strong>高级选项说明</strong>
-                <p class="subtle">只有填写了日志路径、日志通配路径或进程匹配规则时，这组训练识别配置才会生效。外部排队默认会自动尝试 <code>squeue</code>；如果你们实验室有自己的队列脚本，也可以填一个返回 JSON 的探针命令。</p>
+                <strong>Advanced Options Help</strong>
+                <p class="subtle">This training-detection block only applies when you fill a log path, log glob, or process match rule. External queue detection tries <code>squeue</code> by default; you can also provide a probe command that returns JSON.</p>
               </div>
             </div>
           </details>
@@ -315,40 +315,40 @@
       <div class="drawer-card">
         <div class="drawer-header">
           <div>
-            <p id="drawerEyebrow" class="eyebrow">详情</p>
-            <h2 id="drawerTitle">训练详情</h2>
+            <p id="drawerEyebrow" class="eyebrow">Details</p>
+            <h2 id="drawerTitle">Training Details</h2>
           </div>
-          <button id="closeDrawerBtn" class="secondary-button">关闭</button>
+          <button id="closeDrawerBtn" class="secondary-button">Close</button>
         </div>
 
         <div id="drawerMeta" class="drawer-meta"></div>
 
         <section class="chart-grid">
           <div class="chart-card card">
-            <h3>损失</h3>
+            <h3>Loss</h3>
             <canvas id="lossChart" width="600" height="180"></canvas>
           </div>
           <div class="chart-card card">
-            <h3>GPU 利用率</h3>
+            <h3>GPU Utilization</h3>
             <canvas id="gpuChart" width="600" height="180"></canvas>
           </div>
           <div class="chart-card card">
-            <h3>显存</h3>
+            <h3>VRAM</h3>
             <canvas id="memChart" width="600" height="180"></canvas>
           </div>
           <div class="chart-card card">
-            <h3>温度</h3>
+            <h3>Temperature</h3>
             <canvas id="tempChart" width="600" height="180"></canvas>
           </div>
         </section>
 
         <section class="detail-grid">
           <div class="card">
-            <h3>匹配到的进程</h3>
+            <h3>Matched Processes</h3>
             <div id="drawerProcesses" class="process-list"></div>
           </div>
           <div class="card">
-            <h3>最新日志</h3>
+            <h3>Latest Logs</h3>
             <pre id="drawerLog" class="log-tail log-tail-large"></pre>
           </div>
         </section>

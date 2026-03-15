@@ -2,11 +2,12 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Any, Dict, Optional
 
 from .config import ServerConfig
 from .storage import SQLiteStore
+from .time_utils import format_utc, parse_utc_timestamp, utc_now, utc_now_iso
 
 
 ROLE_VIEWER = "viewer"
@@ -18,14 +19,6 @@ ROLE_RANK = {
     ROLE_ADMIN: 30,
 }
 PASSWORD_ITERATIONS = 200_000
-
-
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(str(value or "").replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
 def _password_hash(password: str, salt: Optional[str] = None) -> str:
@@ -66,6 +59,8 @@ class AuthPrincipal:
         return asdict(self)
 
     def has_role(self, required_role: str) -> bool:
+        if self.source == "public":
+            return True
         return ROLE_RANK.get(self.role, 0) >= ROLE_RANK.get(required_role, 0)
 
 
@@ -96,7 +91,7 @@ class AuthManager:
         return "personal"
 
     def public_principal(self) -> AuthPrincipal:
-        return AuthPrincipal(username="public", role=ROLE_ADMIN, source="public", display_name="Public")
+        return AuthPrincipal(username="public", role=ROLE_VIEWER, source="public", display_name="Public")
 
     def _bootstrap_admin(self) -> None:
         username = str(self.server_config.bootstrap_admin_username or "").strip()
@@ -155,7 +150,7 @@ class AuthManager:
         )
 
     def create_session(self, principal: AuthPrincipal) -> Dict[str, Any]:
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         expires_at = now + timedelta(hours=max(1, int(self.server_config.session_ttl_hours or 24)))
         token = secrets.token_urlsafe(32)
         payload = {
@@ -163,9 +158,9 @@ class AuthManager:
             "username": principal.username,
             "role": principal.role,
             "display_name": principal.display_name or principal.username,
-            "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "last_seen_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "expires_at": expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "created_at": format_utc(now),
+            "last_seen_at": format_utc(now),
+            "expires_at": format_utc(expires_at),
         }
         self.store.create_session(payload)
         return payload
@@ -275,4 +270,4 @@ class AuthManager:
         expires_at = str(session.get("expires_at", "")).strip()
         if not expires_at:
             return True
-        return _parse_timestamp(expires_at) <= datetime.now(timezone.utc)
+        return parse_utc_timestamp(expires_at) <= utc_now()
