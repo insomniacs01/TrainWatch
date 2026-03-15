@@ -4,7 +4,9 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
+from .auth import AuthManager
 from .collector import Collector, count_busy_gpus
 from .config import AppConfig, NodeConfig, finalize_server_config, node_from_persisted_dict, node_to_dict
 from .job_queue import (
@@ -82,9 +84,11 @@ class TrainWatchRuntime:
         self.config.server = finalize_server_config(self.config.server)
         self.collector = collector or Collector(config)
         self.store = SQLiteStore(config.server.sqlite_path, config.server.retention_days)
+        self.auth = AuthManager(self.store, self.config.server)
         self.hub = WebSocketHub()
         self.snapshot = empty_snapshot()
         self.recent_events: List[AlertEvent] = []
+        self.current_alerts: List[Dict[str, Any]] = []
         self._node_consecutive_ssh_failures: Dict[str, int] = {}
         self._persisted_node_ids: set = set()
         self._restore_persisted_nodes()
@@ -308,6 +312,21 @@ class TrainWatchRuntime:
             summary=self._summary_for_nodes(current_nodes),
             nodes=current_nodes,
         )
+
+    def _rebuild_snapshot_from_config(self) -> None:
+        if not self.config.nodes:
+            self.snapshot = empty_snapshot()
+            self.current_alerts = []
+            return
+
+        current_nodes = {item.id: item for item in self.snapshot.nodes}
+        next_nodes = [current_nodes.get(node.id) or self._placeholder_snapshot_for_node(node) for node in self.config.nodes]
+        self.snapshot = AppSnapshot(
+            generated_at=utc_now_iso(),
+            summary=self._summary_for_nodes(next_nodes),
+            nodes=next_nodes,
+        )
+        self.current_alerts = self._build_current_alerts(self.snapshot)
 
     def find_node(self, node_id: str) -> Optional[NodeConfig]:
         for node in self.config.nodes:
@@ -556,20 +575,200 @@ class TrainWatchRuntime:
         self._reconcile_queue_job_states(snapshot)
         await self._schedule_pending_queue_jobs(snapshot)
 
+    def _diff_events_v2(
+        self,
+        previous_snapshot: Optional[AppSnapshot],
+        current_snapshot: AppSnapshot,
+    ) -> List[AlertEvent]:
+        events = list(self._diff_events(previous_snapshot, current_snapshot))
+        if previous_snapshot is None:
+            return events
+        previous_node_status = {node.id: node.status for node in previous_snapshot.nodes}
+        for node in current_snapshot.nodes:
+            previous_status = previous_node_status.get(node.id, "")
+            if (
+                previous_status
+                and previous_status not in {"connecting"}
+                and previous_status != node.status
+                and node.status in {"online", "offline"}
+            ):
+                events.append(
+                    AlertEvent(
+                        id=f"node-status-{node.id}-{current_snapshot.generated_at}",
+                        kind="node_status_changed",
+                        node_id=node.id,
+                        node_label=node.label,
+                        run_id="",
+                        run_label="",
+                        status=node.status,
+                        previous_status=previous_status,
+                        at=current_snapshot.generated_at,
+                        message="%s: %s -> %s" % (node.label, previous_status, node.status),
+                        severity="critical" if node.status == "offline" else "warning",
+                        source="runtime",
+                        dedupe_key=f"node-status:{node.id}:{node.status}",
+                    )
+                )
+        return events
+
+    def _build_current_alerts(self, snapshot: AppSnapshot) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        server = self.config.server
+        for node in snapshot.nodes:
+            if node.status in {"offline", "degraded"}:
+                items.append(
+                    {
+                        "id": f"current-node:{node.id}:{node.status}",
+                        "kind": "current_node_alert",
+                        "node_id": node.id,
+                        "node_label": node.label,
+                        "run_id": "",
+                        "run_label": "",
+                        "status": node.status,
+                        "at": node.collected_at or snapshot.generated_at,
+                        "message": f"{node.label}: {node.status}{f' / {node.error}' if node.error else ''}",
+                        "severity": "critical" if node.status == "offline" else "warning",
+                    }
+                )
+            cpu_value = float(node.metrics.get("cpu_usage_percent", 0.0) or 0.0)
+            if cpu_value >= server.cpu_alert_percent:
+                items.append(
+                    {
+                        "id": f"metric-cpu:{node.id}",
+                        "kind": "metric_threshold",
+                        "node_id": node.id,
+                        "node_label": node.label,
+                        "run_id": "",
+                        "run_label": "",
+                        "status": "alert",
+                        "at": node.collected_at or snapshot.generated_at,
+                        "message": f"{node.label}: CPU {cpu_value:.1f}% >= {server.cpu_alert_percent:.1f}%",
+                        "severity": "warning",
+                    }
+                )
+            memory_value = float(node.metrics.get("memory_used_percent", 0.0) or 0.0)
+            if memory_value >= server.memory_alert_percent:
+                items.append(
+                    {
+                        "id": f"metric-memory:{node.id}",
+                        "kind": "metric_threshold",
+                        "node_id": node.id,
+                        "node_label": node.label,
+                        "run_id": "",
+                        "run_label": "",
+                        "status": "alert",
+                        "at": node.collected_at or snapshot.generated_at,
+                        "message": f"{node.label}: memory {memory_value:.1f}% >= {server.memory_alert_percent:.1f}%",
+                        "severity": "warning",
+                    }
+                )
+            disk_value = float(node.metrics.get("disk_used_percent", 0.0) or 0.0)
+            if disk_value >= server.disk_alert_percent:
+                items.append(
+                    {
+                        "id": f"metric-disk:{node.id}",
+                        "kind": "metric_threshold",
+                        "node_id": node.id,
+                        "node_label": node.label,
+                        "run_id": "",
+                        "run_label": "",
+                        "status": "alert",
+                        "at": node.collected_at or snapshot.generated_at,
+                        "message": f"{node.label}: disk {disk_value:.1f}% >= {server.disk_alert_percent:.1f}%",
+                        "severity": "warning",
+                    }
+                )
+            for gpu in node.gpus:
+                gpu_temp = float(gpu.temperature_c or 0.0)
+                if gpu_temp < server.gpu_temp_alert_c:
+                    continue
+                items.append(
+                    {
+                        "id": f"metric-gpu-temp:{node.id}:{gpu.index}",
+                        "kind": "metric_threshold",
+                        "node_id": node.id,
+                        "node_label": node.label,
+                        "run_id": "",
+                        "run_label": "",
+                        "status": "alert",
+                        "at": node.collected_at or snapshot.generated_at,
+                        "message": f"{node.label}: GPU {gpu.index} temp {gpu_temp:.1f}C >= {server.gpu_temp_alert_c:.1f}C",
+                        "severity": "warning",
+                    }
+                )
+            for run in node.runs:
+                if run.status not in {"failed", "stalled"}:
+                    continue
+                items.append(
+                    {
+                        "id": f"current-run:{node.id}:{run.id}:{run.status}",
+                        "kind": "current_run_alert",
+                        "node_id": node.id,
+                        "node_label": node.label,
+                        "run_id": run.id,
+                        "run_label": run.label,
+                        "status": run.status,
+                        "at": run.last_update_at or node.collected_at or snapshot.generated_at,
+                        "message": f"{node.label} / {run.label}: {run.status}{f' / {run.error}' if run.error else ''}",
+                        "severity": "critical",
+                    }
+                )
+        items.sort(
+            key=lambda item: (0 if item.get("severity") == "critical" else 1, str(item.get("at", ""))),
+            reverse=True,
+        )
+        return items[:30]
+
+    def _persist_events(self, events: List[AlertEvent]) -> None:
+        for event in events:
+            self.store.add_alert_event(event)
+
+    def add_audit_log(
+        self,
+        username: str,
+        action: str,
+        target_type: str,
+        target_id: str,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.store.add_audit_log(
+            log_id=f"audit-{uuid4().hex}",
+            at=utc_now_iso(),
+            username=username,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            message=message,
+            details=details,
+        )
+
+    def list_alert_events(self, limit: int = 100, acknowledged: Optional[bool] = None) -> List[Dict[str, Any]]:
+        return self.store.list_alert_events(limit=limit, acknowledged=acknowledged)
+
+    def acknowledge_alert_event(self, event_id: str, username: str) -> Optional[Dict[str, Any]]:
+        return self.store.acknowledge_alert_event(event_id, username)
+
+    def list_audit_logs(self, limit: int = 100) -> List[Dict[str, Any]]:
+        return self.store.list_audit_logs(limit=limit)
+
     async def refresh_once(self) -> Dict[str, Any]:
         lock, _stop_event = self._ensure_async_state()
         async with lock:
             if not self.config.nodes:
                 self.snapshot = empty_snapshot()
+                self.current_alerts = []
                 payload = {"type": "snapshot", "snapshot": self.snapshot_dict(), "events": []}
             else:
                 previous_snapshot = self.snapshot if self.snapshot.nodes else None
                 snapshot, _events = await self.collector.poll_once(previous_snapshot, self.config.nodes)
                 snapshot = self._stabilize_snapshot(snapshot, previous_snapshot)
-                events = self._diff_events(previous_snapshot, snapshot)
+                events = self._diff_events_v2(previous_snapshot, snapshot)
                 self.snapshot = snapshot
+                self.current_alerts = self._build_current_alerts(snapshot)
                 self.recent_events = (events + self.recent_events)[:20]
                 self.store.persist_snapshot(snapshot)
+                self._persist_events(events)
                 await self._sync_queue_jobs(snapshot)
                 payload = {
                     "type": "snapshot",
@@ -616,6 +815,11 @@ class TrainWatchRuntime:
                 job.error = "Connection removed before queued job could finish"
                 self._detach_job_run(job)
                 self._persist_queue_job(job)
+            if removed is not None:
+                self._node_consecutive_ssh_failures.pop(node_id, None)
+                self.recent_events = [event for event in self.recent_events if event.node_id != node_id][:20]
+                self._rebuild_snapshot_from_config()
+                self.store.persist_snapshot(self.snapshot)
         if removed is None:
             return False
         logger.info("Connection removed: id=%s label=%s host=%s", removed.id, removed.label, removed.host)
@@ -623,11 +827,9 @@ class TrainWatchRuntime:
             self.store.delete_persisted_node(removed.id)
             self._persisted_node_ids.discard(removed.id)
         if removed.transport == "ssh" and hasattr(self.collector, "pool"):
-            try:
-                self.collector.pool.close_node(removed)
-            except Exception:
-                pass
-        await self.refresh_once()
+            asyncio.create_task(asyncio.to_thread(self.collector.pool.close_node, removed))
+        await self._broadcast_snapshot()
+        asyncio.create_task(self.refresh_once())
         return True
 
     async def enqueue_job(self, job: QueueJob) -> Dict[str, Any]:
@@ -771,9 +973,11 @@ class TrainWatchRuntime:
             if latest:
                 payload = dict(latest)
                 payload["recent_events"] = [event.to_dict() for event in self.recent_events]
+                payload["current_alerts"] = list(self.current_alerts)
                 return payload
         payload = self.snapshot.to_dict()
         payload["recent_events"] = [event.to_dict() for event in self.recent_events]
+        payload["current_alerts"] = list(self.current_alerts)
         return payload
 
     def history_range_defaults(self) -> Dict[str, str]:

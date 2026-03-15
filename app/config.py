@@ -16,6 +16,10 @@ class ServerConfig:
     host: str = "127.0.0.1"
     port: int = 8420
     shared_token: str = ""
+    enable_user_auth: bool = False
+    bootstrap_admin_username: str = ""
+    bootstrap_admin_password: str = ""
+    session_ttl_hours: int = 24
     poll_seconds: int = 10
     sqlite_path: str = "data/train-watch.sqlite3"
     retention_days: int = 7
@@ -23,6 +27,10 @@ class ServerConfig:
     log_level: str = "INFO"
     ssh_host_key_policy: str = "accept-new"
     ssh_known_hosts_path: str = str(DEFAULT_KNOWN_HOSTS_PATH)
+    cpu_alert_percent: float = 95.0
+    memory_alert_percent: float = 95.0
+    disk_alert_percent: float = 95.0
+    gpu_temp_alert_c: float = 85.0
 
 
 @dataclass
@@ -78,12 +86,29 @@ def finalize_server_config(server: ServerConfig) -> ServerConfig:
     server.host = str(server.host or "127.0.0.1").strip() or "127.0.0.1"
     server.port = max(1, int(server.port or 8420))
     server.shared_token = os.environ.get("TRAIN_WATCH_SHARED_TOKEN", str(server.shared_token or "")).strip()
+    server.enable_user_auth = _parse_bool(
+        os.environ.get("TRAIN_WATCH_ENABLE_USER_AUTH", server.enable_user_auth),
+        False,
+    )
+    server.bootstrap_admin_username = os.environ.get(
+        "TRAIN_WATCH_BOOTSTRAP_ADMIN_USERNAME",
+        str(server.bootstrap_admin_username or ""),
+    ).strip()
+    server.bootstrap_admin_password = os.environ.get(
+        "TRAIN_WATCH_BOOTSTRAP_ADMIN_PASSWORD",
+        str(server.bootstrap_admin_password or ""),
+    ).strip()
+    server.session_ttl_hours = max(1, int(server.session_ttl_hours or 24))
     server.poll_seconds = max(3, int(server.poll_seconds or 10))
     server.retention_days = max(1, int(server.retention_days or 7))
     server.persist_passwords = _parse_bool(server.persist_passwords, False)
     server.log_level = str(server.log_level or "INFO").strip().upper() or "INFO"
     server.ssh_host_key_policy = _normalize_ssh_host_key_policy(server.ssh_host_key_policy)
     server.ssh_known_hosts_path = str(Path(server.ssh_known_hosts_path or DEFAULT_KNOWN_HOSTS_PATH).expanduser())
+    server.cpu_alert_percent = float(server.cpu_alert_percent or 95.0)
+    server.memory_alert_percent = float(server.memory_alert_percent or 95.0)
+    server.disk_alert_percent = float(server.disk_alert_percent or 95.0)
+    server.gpu_temp_alert_c = float(server.gpu_temp_alert_c or 85.0)
     return server
 
 
@@ -284,6 +309,10 @@ def load_config(path_value: str) -> AppConfig:
         host=str(server_raw.get("host", "127.0.0.1")),
         port=int(server_raw.get("port", 8420)),
         shared_token=str(server_raw.get("shared_token", "")),
+        enable_user_auth=_parse_bool(server_raw.get("enable_user_auth", False)),
+        bootstrap_admin_username=str(server_raw.get("bootstrap_admin_username", "")),
+        bootstrap_admin_password=str(server_raw.get("bootstrap_admin_password", "")),
+        session_ttl_hours=max(1, int(server_raw.get("session_ttl_hours", 24))),
         poll_seconds=max(3, int(server_raw.get("poll_seconds", 10))),
         sqlite_path=_resolve_path(
             config_path.parent,
@@ -297,6 +326,10 @@ def load_config(path_value: str) -> AppConfig:
             config_path.parent,
             str(server_raw.get("ssh_known_hosts_path", DEFAULT_KNOWN_HOSTS_PATH)),
         ),
+        cpu_alert_percent=float(server_raw.get("cpu_alert_percent", 95.0)),
+        memory_alert_percent=float(server_raw.get("memory_alert_percent", 95.0)),
+        disk_alert_percent=float(server_raw.get("disk_alert_percent", 95.0)),
+        gpu_temp_alert_c=float(server_raw.get("gpu_temp_alert_c", 85.0)),
     ))
 
     nodes_raw = raw.get("nodes") or []

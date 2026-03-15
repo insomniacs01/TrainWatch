@@ -127,6 +127,13 @@ class AlertEvent:
     previous_status: str
     at: str
     message: str
+    severity: str = "info"
+    source: str = "runtime"
+    dedupe_key: str = ""
+    acknowledged: bool = False
+    acknowledged_at: str = ""
+    acknowledged_by: str = ""
+    id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

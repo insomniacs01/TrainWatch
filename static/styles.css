@@ -18,6 +18,57 @@ body {
   background: radial-gradient(circle at top, #18203e, var(--bg) 45%);
 }
 
+body.overlay-open {
+  overflow: hidden;
+}
+
+body.overlay-open .quick-nav {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.auth-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(3, 7, 18, 0.72);
+  backdrop-filter: blur(16px);
+}
+
+.auth-card {
+  width: min(100%, 420px);
+  padding: 24px;
+  border-radius: 20px;
+  background: rgba(15, 21, 48, 0.96);
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+}
+
+.auth-form,
+.auth-form label {
+  display: grid;
+  gap: 10px;
+}
+
+.auth-form {
+  margin-top: 18px;
+}
+
+.auth-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.auth-error {
+  margin-top: 14px;
+  color: #fca5a5;
+}
+
 .shell {
   max-width: 1280px;
   margin: 0 auto;
@@ -115,10 +166,6 @@ h1, h2, h3, p, pre { margin: 0; }
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  position: sticky;
-  top: 16px;
-  z-index: 4;
-  backdrop-filter: blur(12px);
 }
 .jump-nav {
   min-width: min(100%, 320px);
@@ -138,7 +185,7 @@ h1, h2, h3, p, pre { margin: 0; }
 .quick-nav-hint { max-width: 520px; }
 .node-list { display: grid; gap: 16px; }
 .side-panel-stack { display: grid; gap: 16px; }
-.events-panel { position: sticky; top: 16px; }
+.events-panel { position: static; }
 .events-list { display: grid; gap: 10px; margin-top: 12px; }
 .event-item { padding: 12px; background: rgba(255,255,255,0.02); border-radius: 14px; border: 1px solid rgba(148,163,184,0.08); }
 .event-item strong { display: block; margin-bottom: 6px; }
@@ -162,6 +209,9 @@ h1, h2, h3, p, pre { margin: 0; }
   flex-direction: column;
   gap: 8px;
   align-items: flex-end;
+}
+.node-card.is-removing {
+  opacity: 0.72;
 }
 .connection-error { max-width: 320px; text-align: right; overflow-wrap: anywhere; }
 .danger-button { border-color: rgba(239, 68, 68, 0.3); }
@@ -264,12 +314,30 @@ h1, h2, h3, p, pre { margin: 0; }
 .drawer {
   position: fixed;
   inset: 0;
-  background: rgba(2, 6, 23, 0.72);
+  z-index: 40;
+  background: rgba(2, 6, 23, 0.94);
+  backdrop-filter: blur(18px);
   padding: 16px;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 .drawer-card { max-width: 1200px; margin: 0 auto; }
 .connect-card { max-width: 880px; }
+#connectDrawer {
+  position: static;
+  inset: auto;
+  z-index: auto;
+  background: transparent;
+  backdrop-filter: none;
+  padding: 0;
+  overflow: visible;
+  margin-top: 16px;
+}
+
+#connectDrawer .connect-card {
+  max-width: none;
+}
+
 .drawer-meta { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin: 16px 0; }
 .chart-grid, .detail-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 canvas { width: 100%; height: 180px; }
@@ -376,9 +444,10 @@ canvas { width: 100%; height: 180px; }
   word-break: break-word;
   overflow-wrap: anywhere;
 }
-.jobs-panel { position: sticky; top: 16px; }
+.jobs-panel { position: static; }
 .job-meta { display: grid; gap: 8px; margin-top: 10px; }
 .job-actions { display: flex; gap: 8px; margin-top: 12px; }
+.job-item.is-canceling { opacity: 0.72; }
 
 .badge-button { position: relative; }
 .badge {

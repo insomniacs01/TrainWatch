@@ -203,6 +203,7 @@ export function renderNodesList({
   onOpenRunDetail,
   onRemoveConnection,
   onOpenConnect,
+  removingConnectionIds,
 } = {}) {
   if (!nodeListEl) return;
   if (!snapshot.nodes.length) {
@@ -211,6 +212,7 @@ export function renderNodesList({
   }
 
   nodeListEl.innerHTML = snapshot.nodes.map((node) => {
+    const isRemoving = removingConnectionIds instanceof Set && removingConnectionIds.has(node.id);
     const metrics = node.metrics || {};
     const busyGpuIndices = busyGpuIndicesForNode(node);
     const runPriority = {
@@ -361,7 +363,7 @@ export function renderNodesList({
     });
 
     return `
-      <section id="node-${safeAttr(node.id)}" class="node-card">
+      <section id="node-${safeAttr(node.id)}" class="node-card${isRemoving ? ' is-removing' : ''}">
         <div class="node-header">
           <div>
             <h2>${safeText(node.label)}</h2>
@@ -369,7 +371,7 @@ export function renderNodesList({
           </div>
           <div class="node-actions">
             <span class="status-pill ${safeAttr(statusClass(node.status))}">${safeText(statusLabel(node.status))}</span>
-            <button class="secondary-button danger-button disconnect-button" data-remove-node-id="${safeAttr(node.id)}" data-remove-node-label="${safeAttr(node.label)}">移除连接</button>
+            <button class="secondary-button danger-button disconnect-button" data-remove-node-id="${safeAttr(node.id)}" data-remove-node-label="${safeAttr(node.label)}" ${isRemoving ? 'disabled aria-busy="true"' : ''}>${isRemoving ? '移除中...' : '移除连接'}</button>
             ${node.error ? `<p class="subtle connection-error">${safeText(localizeMessage(node.error))}</p>` : ""}
           </div>
         </div>

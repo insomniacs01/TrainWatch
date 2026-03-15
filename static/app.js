@@ -18,6 +18,10 @@ import { persistToken, restoreToken } from "./token-store.js";
 const state = {
   snapshot: null,
   token: restoreToken(),
+  authConfig: null,
+  authMode: "password",
+  sessionInfo: null,
+  currentUser: null,
   recentEvents: [],
   currentAlerts: [],
   alertFeed: [],
@@ -30,6 +34,9 @@ const state = {
   externalJobsSummary: {},
   connectSubmitting: false,
   jobSubmitting: false,
+  refreshing: false,
+  cancelingJobIds: new Set(),
+  removingConnectionIds: new Set(),
   detailRequestId: 0,
 };
 
@@ -46,8 +53,26 @@ const els = {
   closeConnectBtn: document.getElementById("closeConnectBtn"),
   refreshBtn: document.getElementById("refreshBtn"),
   tokenBtn: document.getElementById("tokenBtn"),
+  authGate: document.getElementById("authGate"),
+  authForm: document.getElementById("authForm"),
+  authModeBadge: document.getElementById("authModeBadge"),
+  authTitle: document.getElementById("authTitle"),
+  authDescription: document.getElementById("authDescription"),
+  authUsernameRow: document.getElementById("authUsernameRow"),
+  authDisplayNameRow: document.getElementById("authDisplayNameRow"),
+  authPasswordRow: document.getElementById("authPasswordRow"),
+  authTokenRow: document.getElementById("authTokenRow"),
+  authUsernameInput: document.getElementById("authUsernameInput"),
+  authDisplayNameInput: document.getElementById("authDisplayNameInput"),
+  authPasswordInput: document.getElementById("authPasswordInput"),
+  authTokenInput: document.getElementById("authTokenInput"),
+  authSubmitBtn: document.getElementById("authSubmitBtn"),
+  authSwitchBtn: document.getElementById("authSwitchBtn"),
+  authRegisterBtn: document.getElementById("authRegisterBtn"),
+  authError: document.getElementById("authError"),
   alertsBtn: document.getElementById("alertsBtn"),
   alertBadge: document.getElementById("alertBadge"),
+  modeBadge: document.getElementById("modeBadge"),
   detailDrawer: document.getElementById("detailDrawer"),
   drawerTitle: document.getElementById("drawerTitle"),
   drawerEyebrow: document.getElementById("drawerEyebrow"),
@@ -76,6 +101,57 @@ const els = {
 
 const { apiGet, apiJson } = createApiClient(() => state.token);
 
+const MODE_LABELS = {
+  personal: "个人模式",
+  "personal-token": "令牌模式",
+  team: "团队模式",
+};
+
+function currentModeLabel() {
+  return MODE_LABELS[state.authConfig?.mode] || "访问模式";
+}
+
+function updateModeBadge() {
+  const mode = state.authConfig?.mode || "personal";
+  const modeLabel = currentModeLabel();
+  if (els.authModeBadge) {
+    els.authModeBadge.textContent = modeLabel;
+  }
+  if (!els.modeBadge) return;
+  if (mode === "personal") {
+    els.modeBadge.textContent = "当前模式：个人模式 · 无需登录";
+    return;
+  }
+  if (mode === "team") {
+    els.modeBadge.textContent = state.authConfig?.bootstrap_required
+      ? "当前模式：团队模式 · 首次创建管理员"
+      : "当前模式：团队模式 · 账号登录";
+    return;
+  }
+  els.modeBadge.textContent = "当前模式：令牌模式 · 输入访问令牌";
+}
+
+async function fetchAuthConfig() {
+  const response = await fetch("/api/v1/auth/config");
+  if (!response.ok) {
+    throw new Error(`Failed to load auth config: HTTP ${response.status}`);
+  }
+  const payload = await response.json();
+  state.authConfig = payload;
+  const methods = Array.isArray(payload.login_methods) ? payload.login_methods : [];
+  if (payload.bootstrap_required) {
+    state.authMode = "password";
+  } else if (methods.includes(state.authMode)) {
+    state.authMode = state.authMode;
+  } else if (payload.user_auth_enabled) {
+    state.authMode = "password";
+  } else if (payload.shared_token_enabled) {
+    state.authMode = "token";
+  }
+  updateModeBadge();
+  return payload;
+}
+
 const stream = createSnapshotStream({
   getToken: () => state.token,
   onSnapshot: (payload) => {
@@ -88,7 +164,7 @@ const stream = createSnapshotStream({
   onError: (message, meta) => {
     showBanner(message, "error");
     if (meta?.kind === "auth") {
-      promptForToken(message);
+      showAuthGate(message || "Please sign in again.");
     }
   },
 });
@@ -115,7 +191,27 @@ function clearBanner(kind = null) {
 
 function updateTokenButtonVisibility() {
   if (!els.tokenBtn) return;
-  els.tokenBtn.classList.toggle("hidden", !state.token && state.snapshot);
+  const authRequired = Boolean(state.authConfig?.auth_required);
+  els.tokenBtn.classList.toggle("hidden", !authRequired);
+  if (!authRequired) return;
+  updateModeBadge();
+  if (state.currentUser?.source === "session") {
+    els.tokenBtn.textContent = `账户 · ${state.currentUser.display_name || state.currentUser.username}`;
+    return;
+  }
+  if (state.currentUser?.source === "shared_token") {
+    els.tokenBtn.textContent = "令牌访问";
+    return;
+  }
+  if (state.authConfig?.bootstrap_required) {
+    els.tokenBtn.textContent = "团队注册";
+    return;
+  }
+  if (state.authConfig?.mode === "team") {
+    els.tokenBtn.textContent = "团队登录";
+    return;
+  }
+  els.tokenBtn.textContent = state.token ? "更换令牌" : "输入令牌";
 }
 
 function renderJumpOptions(snapshot) {
@@ -185,6 +281,108 @@ function isAuthError(error) {
   return Number(error?.status || 0) === 401;
 }
 
+function setAuthError(message = "") {
+  if (!els.authError) return;
+  els.authError.textContent = message;
+  els.authError.classList.toggle("hidden", !message);
+}
+
+function setAuthMode(mode) {
+  const methods = state.authConfig?.login_methods || [];
+  const bootstrapRequired = Boolean(state.authConfig?.bootstrap_required);
+  if (!methods.includes(mode) && methods.length) {
+    state.authMode = methods[0];
+  } else {
+    state.authMode = mode;
+  }
+  if (bootstrapRequired) {
+    state.authMode = "password";
+  }
+
+  const isToken = state.authMode === "token";
+  const isBootstrap = bootstrapRequired && !isToken;
+  const isTeamMode = state.authConfig?.mode === "team";
+  const canSwitch = !bootstrapRequired && methods.length > 1;
+
+  els.authUsernameRow?.classList.toggle("hidden", isToken);
+  els.authDisplayNameRow?.classList.toggle("hidden", !isBootstrap);
+  els.authPasswordRow?.classList.toggle("hidden", isToken);
+  els.authTokenRow?.classList.toggle("hidden", !isToken);
+  els.authSwitchBtn?.classList.toggle("hidden", !canSwitch);
+  els.authRegisterBtn?.classList.toggle("hidden", !isBootstrap);
+  els.authSubmitBtn?.classList.toggle("hidden", isBootstrap);
+
+  if (els.authSwitchBtn) {
+    els.authSwitchBtn.textContent = isToken ? "改用账号密码" : "改用访问令牌";
+  }
+  if (els.authPasswordInput) {
+    els.authPasswordInput.autocomplete = isBootstrap ? "new-password" : "current-password";
+  }
+  if (els.authTitle) {
+    if (isBootstrap) {
+      els.authTitle.textContent = "首次使用：创建管理员账号";
+    } else if (isToken) {
+      els.authTitle.textContent = isTeamMode ? "团队模式：输入访问令牌" : "输入访问令牌";
+    } else if (isTeamMode) {
+      els.authTitle.textContent = "团队模式登录";
+    } else {
+      els.authTitle.textContent = "登录 Train Watch";
+    }
+  }
+  if (els.authDescription) {
+    if (isBootstrap) {
+      els.authDescription.textContent = "当前是团队模式，系统里还没有任何账号。先创建一个管理员账号，创建完成后会自动进入系统。";
+    } else if (isToken) {
+      els.authDescription.textContent = "当前是令牌模式，请输入部署时配置的访问令牌后进入。";
+    } else if (isTeamMode) {
+      els.authDescription.textContent = "当前是团队模式，请使用账号和密码登录。首次部署时，先由页面创建第一个管理员账号。";
+    } else {
+      els.authDescription.textContent = "请输入登录信息继续。";
+    }
+  }
+  if (els.authSubmitBtn) {
+    els.authSubmitBtn.textContent = isToken ? "进入系统" : "登录";
+  }
+  if (els.authRegisterBtn) {
+    els.authRegisterBtn.textContent = "创建管理员并进入";
+  }
+}
+
+function showAuthGate(message = "") {
+  if (!state.authConfig?.auth_required) {
+    els.authGate?.classList.add("hidden");
+    document.body.classList.remove("overlay-open");
+    return;
+  }
+  updateModeBadge();
+  setAuthMode(state.authMode);
+  setAuthError(message);
+  els.authGate?.classList.remove("hidden");
+  document.body.classList.add("overlay-open");
+  window.setTimeout(() => {
+    if (state.authConfig?.bootstrap_required) {
+      els.authUsernameInput?.focus();
+    } else if (state.authMode === "password") {
+      els.authUsernameInput?.focus();
+    } else {
+      els.authTokenInput?.focus();
+    }
+  }, 0);
+}
+
+function hideAuthGate() {
+  setAuthError("");
+  els.authGate?.classList.add("hidden");
+  syncOverlayState();
+}
+
+function syncOverlayState() {
+  const hasOverlay = [els.authGate, els.detailDrawer].some(
+    (element) => element && !element.classList.contains("hidden")
+  );
+  document.body.classList.toggle("overlay-open", hasOverlay);
+}
+
 function promptForToken(message = "设置 Train Watch 令牌") {
   const nextToken = window.prompt(message, state.token || "");
   if (nextToken === null) return false;
@@ -195,14 +393,159 @@ function promptForToken(message = "设置 Train Watch 令牌") {
   return Boolean(state.token);
 }
 
+async function loginWithPassword(message = "Login to Train Watch") {
+  const username = window.prompt(`${message}\nUsername`, state.currentUser?.username || "");
+  if (username === null) return false;
+  const password = window.prompt("Password", "");
+  if (password === null) return false;
+  const response = await fetch("/api/v1/session/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: username.trim(), password }),
+  });
+  let payload = {};
+  try {
+    payload = await response.json();
+  } catch (_error) {}
+  if (!response.ok) {
+    throw new Error(localizeMessage(payload.detail || payload.error || `HTTP ${response.status}`));
+  }
+  state.token = String(payload.token || "").trim();
+  persistToken(state.token);
+  await loadSessionState({ silent: true });
+  updateTokenButtonVisibility();
+  stream.connect();
+  return Boolean(state.token);
+}
+
+async function loginWithTokenValue(token) {
+  state.token = String(token || "").trim();
+  persistToken(state.token);
+  await loadSessionState({ silent: true });
+  updateTokenButtonVisibility();
+  return Boolean(state.token);
+}
+
+async function logoutCurrentSession() {
+  if (!state.token) return;
+  try {
+    await apiJson("POST", "/api/v1/session/logout", {});
+  } catch (_error) {
+    // ignore logout failures and clear locally
+  }
+  state.token = "";
+  state.sessionInfo = null;
+  state.currentUser = null;
+  persistToken("");
+  updateTokenButtonVisibility();
+  stream.disconnect();
+}
+
+async function loadSessionState({ silent = false } = {}) {
+  try {
+    const payload = await apiGet("/api/v1/session/me");
+    state.sessionInfo = payload;
+    state.currentUser = payload?.user || null;
+    updateTokenButtonVisibility();
+    return payload;
+  } catch (error) {
+    if (!silent && !isAuthError(error)) {
+      showBanner(error.message || String(error), "error");
+    }
+    if (isAuthError(error)) {
+      state.currentUser = null;
+    }
+    state.sessionInfo = state.sessionInfo || { auth_required: isAuthError(error), user_auth_enabled: false };
+    updateTokenButtonVisibility();
+    throw error;
+  }
+}
+
 async function withAuthRecovery(task) {
   try {
     return await task();
   } catch (error) {
-    if (!isAuthError(error) || !promptForToken(error.message || "请输入 Train Watch 令牌")) {
+    if (!isAuthError(error)) {
       throw error;
     }
-    return task();
+    showAuthGate(error.message || "Please sign in to continue.");
+    throw error;
+  }
+}
+
+async function enterApp() {
+  hideAuthGate();
+  await fetchSnapshot();
+  await loadSshAliases().catch(() => {});
+  stream.connect();
+}
+
+async function handleBootstrapAdmin() {
+  const username = String(els.authUsernameInput?.value || "").trim();
+  const password = String(els.authPasswordInput?.value || "");
+  const displayName = String(els.authDisplayNameInput?.value || "").trim();
+  if (!username || !password) {
+    setAuthError("请先填写管理员账号和密码。");
+    return;
+  }
+  const response = await fetch("/api/v1/session/bootstrap-admin", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username, password, display_name: displayName }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    setAuthError(localizeMessage(payload.detail || payload.error || `HTTP ${response.status}`));
+    return;
+  }
+  state.token = String(payload.token || "").trim();
+  persistToken(state.token);
+  await fetchAuthConfig();
+  await loadSessionState({ silent: true }).catch(() => {});
+  updateTokenButtonVisibility();
+  await enterApp();
+}
+
+async function handleAuthSubmit(event) {
+  event.preventDefault();
+  setAuthError("");
+  try {
+    if (state.authConfig?.bootstrap_required && state.authMode !== "token") {
+      await handleBootstrapAdmin();
+      return;
+    }
+    if (state.authMode === "password") {
+      const username = String(els.authUsernameInput?.value || "").trim();
+      const password = String(els.authPasswordInput?.value || "");
+      if (!username || !password) {
+        setAuthError("Username and password are required.");
+        return;
+      }
+      const response = await fetch("/api/v1/session/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setAuthError(localizeMessage(payload.detail || payload.error || `HTTP ${response.status}`));
+        return;
+      }
+      state.token = String(payload.token || "").trim();
+      persistToken(state.token);
+    } else {
+      const token = String(els.authTokenInput?.value || "").trim();
+      if (!token) {
+        setAuthError("Access token is required.");
+        return;
+      }
+      await loginWithTokenValue(token);
+    }
+    await loadSessionState({ silent: true }).catch(() => {});
+    updateTokenButtonVisibility();
+    await enterApp();
+  } catch (error) {
+    setAuthError(error.message || String(error));
   }
 }
 
@@ -270,6 +613,9 @@ function playAlertTone() {
 
 function buildCurrentAlerts(snapshot) {
   if (!snapshot) return [];
+  if (Array.isArray(snapshot.current_alerts) && snapshot.current_alerts.length) {
+    return snapshot.current_alerts.slice(0, 20);
+  }
   const items = [];
   const sortOrder = { failed: 0, offline: 1, stalled: 2, degraded: 3 };
   (snapshot.nodes || []).forEach((node) => {
@@ -361,7 +707,8 @@ function renderSnapshot(snapshot) {
   state.snapshot = snapshot;
   updateTokenButtonVisibility();
   renderJumpOptions(snapshot);
-  els.subtitle.textContent = `最近刷新：${snapshot.generated_at}`;
+  const userLabel = state.currentUser ? ` · ${state.currentUser.display_name || state.currentUser.username}` : "";
+  els.subtitle.textContent = `最近刷新：${snapshot.generated_at}${userLabel}`;
   renderSummaryCards(els.summaryGrid, snapshot);
   renderNodesList({
     nodeListEl: els.nodeList,
@@ -369,6 +716,7 @@ function renderSnapshot(snapshot) {
     onOpenRunDetail: openRunDetail,
     onRemoveConnection: removeConnection,
     onOpenConnect: openConnectDrawer,
+    removingConnectionIds: state.removingConnectionIds,
   });
   applyFoldState(document);
   renderAlertFeed();
@@ -387,12 +735,26 @@ async function fetchSnapshot() {
   await loadJobs();
 }
 
+function setRefreshing(refreshing) {
+  state.refreshing = refreshing;
+  if (els.refreshBtn) {
+    els.refreshBtn.disabled = refreshing;
+    els.refreshBtn.textContent = refreshing ? "\u5237\u65b0\u4e2d..." : "\u7acb\u5373\u5237\u65b0";
+  }
+}
+
 async function refreshNow() {
-  const snapshot = await withAuthRecovery(() => apiJson("POST", "/api/v1/refresh"));
-  syncAlertFeed(snapshot);
-  renderSnapshot(snapshot);
-  await loadConnections();
-  await loadJobs();
+  if (state.refreshing) return;
+  setRefreshing(true);
+  try {
+    const snapshot = await withAuthRecovery(() => apiJson("POST", "/api/v1/refresh"));
+    syncAlertFeed(snapshot);
+    renderSnapshot(snapshot);
+    await loadConnections();
+    await loadJobs();
+  } finally {
+    setRefreshing(false);
+  }
 }
 
 function resetDetailCharts() {
@@ -417,6 +779,7 @@ async function openRunDetail(nodeId, runId) {
     node,
     run,
   });
+  syncOverlayState();
   resetDetailCharts();
 
   const end = new Date();
@@ -440,11 +803,18 @@ async function openRunDetail(nodeId, runId) {
   }
 }
 
-function openConnectDrawer() { els.connectDrawer.classList.remove("hidden"); }
-function closeConnectDrawer() { els.connectDrawer.classList.add("hidden"); }
+function openConnectDrawer() {
+  els.connectDrawer.classList.remove("hidden");
+  els.connectDrawer.scrollIntoView({ behavior: "smooth", block: "start" });
+  window.setTimeout(() => els.hostInput?.focus(), 50);
+}
+function closeConnectDrawer() {
+  els.connectDrawer.classList.add("hidden");
+}
 function closeDetailDrawer() {
   state.detailRequestId += 1;
   els.detailDrawer.classList.add("hidden");
+  syncOverlayState();
 }
 
 async function setupServiceWorker() {
@@ -467,18 +837,36 @@ async function setupServiceWorker() {
 }
 
 async function bootstrap() {
+  const requestedPanel = new URLSearchParams(window.location.search).get("panel");
+  if (els.connectDrawer && els.banner?.parentElement) {
+    els.banner.insertAdjacentElement("afterend", els.connectDrawer);
+  }
   els.connectBtn.addEventListener("click", openConnectDrawer);
   els.closeConnectBtn.addEventListener("click", closeConnectDrawer);
+  els.authForm?.addEventListener("submit", handleAuthSubmit);
+  els.authSwitchBtn?.addEventListener("click", () => {
+    setAuthMode(state.authMode === "password" ? "token" : "password");
+    setAuthError("");
+  });
+  els.authRegisterBtn?.addEventListener("click", () => {
+    handleBootstrapAdmin().catch((error) => setAuthError(error.message || String(error)));
+  });
   els.connectDrawer.addEventListener("click", (event) => {
     if (event.target === els.connectDrawer) closeConnectDrawer();
   });
   els.connectForm.addEventListener("submit", submitConnection);
   els.jobForm?.addEventListener("submit", submitJob);
   els.refreshBtn.addEventListener("click", () => refreshNow().catch((error) => showBanner(error.message || String(error), "error")));
-  els.tokenBtn.addEventListener("click", () => {
-    if (!promptForToken("设置 Train Watch 令牌")) return;
-    fetchSnapshot().catch((error) => showBanner(error.message || String(error), "error"));
-    loadSshAliases().catch(() => {});
+  els.tokenBtn.addEventListener("click", async () => {
+    try {
+      if ((state.currentUser?.source === "session" || state.token) && window.confirm("Log out current access and return to sign-in?")) {
+        await logoutCurrentSession();
+      }
+      await fetchAuthConfig().catch(() => {});
+      showAuthGate();
+    } catch (error) {
+      showBanner(error.message || String(error), "error");
+    }
   });
   els.alertsBtn.addEventListener("click", () => {
     state.unreadAlerts = 0;
@@ -505,11 +893,28 @@ async function bootstrap() {
   els.applyAliasBtn?.addEventListener("click", applySelectedAlias);
   els.refreshAliasesBtn?.addEventListener("click", () => loadSshAliases(true));
   await setupServiceWorker();
+  await fetchAuthConfig();
   updateTokenButtonVisibility();
   applyFoldState(document);
-  await fetchSnapshot();
-  await loadSshAliases();
-  stream.connect();
+  if (requestedPanel === "connect") {
+    openConnectDrawer();
+  }
+  if (!state.authConfig?.auth_required) {
+    await enterApp();
+    return;
+  }
+  if (state.token) {
+    try {
+      await loadSessionState({ silent: true });
+      await enterApp();
+      return;
+    } catch (_error) {
+      state.token = "";
+      state.currentUser = null;
+      persistToken("");
+    }
+  }
+  showAuthGate();
 }
 
 bootstrap().catch((error) => showBanner(error.message || String(error), "error"));

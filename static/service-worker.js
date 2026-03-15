@@ -1,4 +1,4 @@
-const CACHE_NAME = "train-watch-v4";
+const CACHE_NAME = "train-watch-v7";
 const ASSETS = [
   "/",
   "/manifest.webmanifest",
@@ -37,18 +37,6 @@ async function networkFirst(request) {
   }
 }
 
-async function staleWhileRevalidate(request) {
-  const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(request);
-  const networkPromise = fetch(request)
-    .then((response) => {
-      cache.put(request, response.clone());
-      return response;
-    })
-    .catch(() => null);
-  return cached || networkPromise || caches.match("/");
-}
-
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
@@ -59,7 +47,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (ASSETS.includes(url.pathname)) {
-    event.respondWith(staleWhileRevalidate(event.request));
+    event.respondWith(networkFirst(event.request));
     return;
   }
 

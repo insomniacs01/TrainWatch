@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -89,6 +90,43 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(len(runtime.config.nodes), 1)
             self.assertEqual(runtime.config.nodes[0].password, "secret-password")
             self.assertEqual(runtime.config.nodes[0].key_path, "")
+
+    def test_remove_node_updates_snapshot_without_waiting_for_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = AppConfig(
+                server=ServerConfig(sqlite_path=str(Path(tmp_dir) / "test.sqlite3")),
+                nodes=[],
+                config_path=Path(tmp_dir) / "config.yaml",
+            )
+            runtime = TrainWatchRuntime(config, collector=DummyCollector())
+            node = NodeConfig(
+                id="node-1",
+                label="GPU Box",
+                host="gpu.example.com",
+                port=22,
+                user="ubuntu",
+                key_path="",
+                password="secret",
+                runs=[],
+            )
+            runtime.config.nodes = [node]
+            runtime._set_placeholder_node(node)
+
+            scheduled = []
+
+            def capture_task(coro):
+                scheduled.append(coro)
+                coro.close()
+                return None
+
+            with patch("app.runtime.asyncio.create_task", side_effect=capture_task) as create_task:
+                removed = asyncio.run(runtime.remove_node("node-1"))
+
+            self.assertTrue(removed)
+            self.assertEqual(runtime.config.nodes, [])
+            self.assertEqual(runtime.snapshot.nodes, [])
+            self.assertEqual(runtime.snapshot.summary["nodes_total"], 0)
+            self.assertGreaterEqual(create_task.call_count, 1)
 
     def test_websocket_stream_requires_auth_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

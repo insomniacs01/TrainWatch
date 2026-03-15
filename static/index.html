@@ -10,15 +10,49 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/static/icon.svg" />
     <link rel="icon" href="/static/icon.svg" />
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260315-1" />
   </head>
   <body>
+    <div id="authGate" class="auth-gate hidden" aria-live="polite">
+      <div class="auth-card">
+        <p class="eyebrow">Train Watch</p>
+        <span id="authModeBadge" class="status-pill">当前模式</span>
+        <h2 id="authTitle">正在检查登录方式</h2>
+        <p id="authDescription" class="subtle">正在载入登录方式，请稍候。</p>
+        <form id="authForm" class="auth-form">
+          <label id="authUsernameRow">
+            <span>账号</span>
+            <input id="authUsernameInput" name="username" autocomplete="username" />
+          </label>
+          <label id="authDisplayNameRow" class="hidden">
+            <span>显示名称</span>
+            <input id="authDisplayNameInput" name="display_name" autocomplete="nickname" />
+          </label>
+          <label id="authPasswordRow">
+            <span>密码</span>
+            <input id="authPasswordInput" name="password" type="password" autocomplete="current-password" />
+          </label>
+          <label id="authTokenRow" class="hidden">
+            <span>访问令牌</span>
+            <input id="authTokenInput" name="token" type="password" autocomplete="off" />
+          </label>
+          <div class="auth-actions">
+            <button type="submit" id="authSubmitBtn" class="secondary-button primary-button">登录</button>
+            <button type="button" id="authSwitchBtn" class="secondary-button hidden">改用令牌</button>
+            <button type="button" id="authRegisterBtn" class="secondary-button hidden">创建管理员</button>
+          </div>
+        </form>
+        <p id="authError" class="auth-error hidden"></p>
+      </div>
+    </div>
+
     <div class="shell">
       <header class="topbar">
         <div>
           <p class="eyebrow">Train Watch</p>
           <h1>SSH 训练监控面板</h1>
           <p class="subtle" id="subtitle">等待第一轮采集...</p>
+          <span id="modeBadge" class="status-pill">当前模式：检测中</span>
         </div>
         <div class="topbar-actions">
           <button id="connectBtn" class="secondary-button primary-button">连接 SSH</button>
@@ -321,6 +355,6 @@
       </div>
     </aside>
 
-    <script type="module" src="/static/app.js"></script>
+    <script type="module" src="/static/app.js?v=20260315-1"></script>
   </body>
 </html>

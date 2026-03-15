@@ -9,7 +9,7 @@ function safeAttr(value) {
   return escapeAttr(value ?? "");
 }
 
-export function renderJobsPanel({ summary = {}, jobs = [], summaryEl, listEl, onCancel } = {}) {
+export function renderJobsPanel({ summary = {}, jobs = [], summaryEl, listEl, onCancel, cancelingJobIds } = {}) {
   if (summaryEl) {
     summaryEl.innerHTML = [
       noteChip("排队中", summary.jobs_queued ?? 0),
@@ -24,8 +24,10 @@ export function renderJobsPanel({ summary = {}, jobs = [], summaryEl, listEl, on
     listEl.innerHTML = `<div class="job-item"><strong>还没有排队任务</strong><p class="subtle">选择一台已连接的 GPU 机器，填写命令和所需 GPU 数，就可以加入 FIFO 队列。</p></div>`;
     return;
   }
-  listEl.innerHTML = jobs.map((job) => `
-    <article class="job-item">
+  listEl.innerHTML = jobs.map((job) => {
+    const isCanceling = cancelingJobIds instanceof Set && cancelingJobIds.has(job.id);
+    return `
+    <article class="job-item${isCanceling ? ' is-canceling' : ''}">
       <div class="run-row">
         <strong>${safeText(job.label)}</strong>
         <span class="status-pill ${safeAttr(statusClass(job.status))}">${safeText(statusLabel(job.status))}</span>
@@ -48,10 +50,11 @@ export function renderJobsPanel({ summary = {}, jobs = [], summaryEl, listEl, on
       </div>
       <code>${safeText(job.command || "")}</code>
       <div class="job-actions">
-        ${job.can_cancel ? `<button class="secondary-button danger-button cancel-job-button" data-job-id="${safeAttr(job.id)}">取消排队</button>` : ""}
+        ${job.can_cancel ? `<button class="secondary-button danger-button cancel-job-button" data-job-id="${safeAttr(job.id)}" ${isCanceling ? 'disabled aria-busy="true"' : ''}>${isCanceling ? '\u53d6\u6d88\u4e2d...' : '\u53d6\u6d88\u6392\u961f'}</button>` : ""}
       </div>
     </article>
-  `).join("");
+  `;
+  }).join("");
   listEl.querySelectorAll(".cancel-job-button[data-job-id]").forEach((element) => {
     element.addEventListener("click", (event) => {
       event.preventDefault();

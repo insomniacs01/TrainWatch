@@ -13,6 +13,8 @@ This repository currently includes two tracks:
 
 ## Features
 
+- Local user auth with `viewer` / `operator` / `admin` roles, plus legacy shared-token access for scripts
+- Session login, audit logs, persisted alert history, and alert acknowledgement endpoints
 - SSH-based monitoring with password auth, key auth, local SSH aliases, and jump-host friendly workflows
 - UI-added SSH connections survive restart via SQLite persistence, with password persistence opt-in
 - Real metrics for CPU, RAM, disk, GPU utilization, VRAM, temperature, power, and GPU processes
@@ -126,6 +128,44 @@ Train Watch is near-realtime rather than millisecond streaming.
 
 A `5s` poll interval is usually responsive enough for training monitoring.
 
+## Access Modes
+
+Train Watch now has three clear access modes.
+
+- default local startup uses `config.empty.yaml`, which is personal mode and does not require login
+- `personal`: no login at all, open the page and use it directly
+- `personal-token`: page asks only for one access token
+- `team`: page shows account login; if no user exists yet, the first screen becomes `Create Admin`
+
+Recommended behavior:
+
+- for a private personal deployment, keep `shared_token` empty and `enable_user_auth: false`
+- for a script-controlled personal deployment, set `shared_token`
+- for a shared lab or team deployment, set `enable_user_auth: true`
+
+In `team` mode, the intended first-run flow is:
+
+1. open the page
+2. see `Team Mode · Create Admin`
+3. create the first admin directly in the web page
+4. enter the dashboard automatically
+5. afterwards, other users sign in with username and password
+
+Role model:
+
+- `viewer`: read dashboards, history, alerts, and metrics
+- `operator`: refresh snapshots, add/remove connections, queue/cancel jobs, acknowledge alerts
+- `admin`: manage users and inspect audit logs
+
+## Alerting Model
+
+Train Watch now exposes both transient status-change events and live current alerts.
+
+- persistent alert history is available via `/api/v1/alerts`
+- acknowledged alerts can be marked through `/api/v1/alerts/{alert_id}/ack`
+- current alerts include node offline/degraded, run failed/stalled, and threshold-based CPU / memory / disk / GPU-temperature warnings
+- Prometheus-style metrics are exposed at `/api/v1/metrics`
+
 ## Shared GPU Queue
 
 Train Watch now also supports a lightweight FIFO queue for small teams sharing the same GPU box.
@@ -197,7 +237,11 @@ That creates an app-like icon on iPhone, while `v1` still remains a PWA rather t
 
 ## API
 
+- `POST /api/v1/session/login`
+- `POST /api/v1/session/logout`
+- `GET /api/v1/session/me`
 - `GET /api/v1/health`
+- `GET /api/v1/metrics`
 - `GET /api/v1/snapshot`
 - `POST /api/v1/refresh`
 - `GET /api/v1/history`
@@ -207,6 +251,12 @@ That creates an app-like icon on iPhone, while `v1` still remains a PWA rather t
 - `GET /api/v1/jobs`
 - `POST /api/v1/jobs`
 - `DELETE /api/v1/jobs/{job_id}`
+- `GET /api/v1/alerts`
+- `POST /api/v1/alerts/{alert_id}/ack`
+- `GET /api/v1/users`
+- `POST /api/v1/users`
+- `PATCH /api/v1/users/{username}`
+- `GET /api/v1/audit-logs`
 - `WS /api/v1/stream`
 
 ## Tests
@@ -219,16 +269,18 @@ If you do not use the bundled virtualenv, `python3 -m unittest discover -s tests
 
 ## Security Notes
 
-Train Watch is currently designed for single-user, self-hosted usage.
+Train Watch still works in simple single-user mode, but it now also supports local multi-user deployments.
 
 - `server.shared_token` is optional; leave it empty for the simplest local/self-hosted setup
-- if you expose the service beyond a trusted local environment, set `server.shared_token`
+- if you expose the service beyond a trusted local environment, prefer `server.enable_user_auth: true` and bootstrap an admin account
+- `server.shared_token` still works for automation, scripts, or reverse-proxy protected deployments
+- session tokens are stored in browser session storage by the frontend and expire after `server.session_ttl_hours`
 - frontend tokens are kept in browser session storage
 - WebSocket authentication is sent as an initial auth message instead of a URL query parameter
 - UI-added SSH connections are persisted in SQLite so they survive restart; by default, SSH passwords stay in memory and are not written to SQLite
 - set `server.persist_passwords: true` only if you explicitly want password-based UI connections to survive restart
 - SSH host keys now default to `accept-new`; switch `server.ssh_host_key_policy` to `strict` if you want pre-provisioned host keys only
-- queue submitter names are plain text labels rather than a real auth system
+- queue submitter names automatically fall back to the authenticated operator when omitted
 - avoid committing real hostnames, usernames, ports, private paths, or secrets into the repository
 
 ## Roadmap
@@ -241,6 +293,8 @@ Train Watch is currently designed for single-user, self-hosted usage.
 - [x] Loss / ETA / progress / estimated finish time
 - [x] Mobile-first PWA
 - [x] Shared GPU FIFO queue and auto launch
+- [x] Local multi-user auth, sessions, audit logs, and persisted alert history
+- [x] Prometheus metrics endpoint and threshold-based current alerts
 - [ ] Native iPhone direct-SSH app in `train-watch-v2/`
 
 ## License

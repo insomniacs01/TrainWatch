@@ -2,6 +2,10 @@ server:
   host: 0.0.0.0
   port: 8420
   shared_token: ""
+  enable_user_auth: false
+  bootstrap_admin_username: ""
+  bootstrap_admin_password: ""
+  session_ttl_hours: 24
   poll_seconds: 10
   sqlite_path: data/train-watch.sqlite3
   retention_days: 7
@@ -9,6 +13,15 @@ server:
   log_level: INFO
   ssh_host_key_policy: accept-new
   ssh_known_hosts_path: ~/.ssh/known_hosts
+  cpu_alert_percent: 95
+  memory_alert_percent: 95
+  disk_alert_percent: 95
+  gpu_temp_alert_c: 85
+
+  # Optional team mode:
+  # enable_user_auth: true
+  # bootstrap_admin_username: admin
+  # bootstrap_admin_password: change-me-now
 
 nodes:
   - id: lab-a100

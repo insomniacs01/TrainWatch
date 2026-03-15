@@ -44,6 +44,41 @@ export function createJobsController({
     }
   }
 
+  function queueSummaryFromJobs(jobs) {
+    const items = Array.isArray(jobs) ? jobs : [];
+    const activeStatuses = new Set(["queued", "starting", "running"]);
+    return {
+      jobs_queued: items.filter((job) => job.status === "queued").length,
+      jobs_starting: items.filter((job) => job.status === "starting").length,
+      jobs_running: items.filter((job) => job.status === "running").length,
+      jobs_failed: items.filter((job) => job.status === "failed").length,
+      gpu_requested_active: items.reduce((total, job) => total + (activeStatuses.has(job.status) ? Number(job.gpu_count || 0) : 0), 0),
+    };
+  }
+
+  function renderCurrentJobs() {
+    renderJobsPanel({
+      summary: state.jobsSummary,
+      jobs: state.jobs,
+      summaryEl: els.jobSummary,
+      listEl: els.jobList,
+      onCancel: cancelJob,
+      cancelingJobIds: state.cancelingJobIds,
+    });
+  }
+
+  function setJobCanceling(jobId, canceling) {
+    if (!jobId) return;
+    if (state.cancelingJobIds instanceof Set) {
+      if (canceling) {
+        state.cancelingJobIds.add(jobId);
+      } else {
+        state.cancelingJobIds.delete(jobId);
+      }
+    }
+    renderCurrentJobs();
+  }
+
   async function loadConnections() {
     const payload = await guard(() => apiGet("/api/v1/connections"));
     state.connections = payload.items || [];
@@ -56,13 +91,7 @@ export function createJobsController({
     state.jobsSummary = payload.summary || {};
     state.externalJobs = payload.external_items || [];
     state.externalJobsSummary = payload.external_summary || {};
-    renderJobsPanel({
-      summary: state.jobsSummary,
-      jobs: state.jobs,
-      summaryEl: els.jobSummary,
-      listEl: els.jobList,
-      onCancel: cancelJob,
-    });
+    renderCurrentJobs();
     renderExternalJobsPanel({
       summary: state.externalJobsSummary,
       jobs: state.externalJobs,
@@ -73,13 +102,24 @@ export function createJobsController({
 
   async function cancelJob(jobId) {
     if (!jobId) return;
-    if (!window.confirm("确认取消这个排队任务吗？")) return;
+    if (state.cancelingJobIds instanceof Set && state.cancelingJobIds.has(jobId)) return;
+    if (!window.confirm("\u786e\u8ba4\u53d6\u6d88\u8fd9\u4e2a\u6392\u961f\u4efb\u52a1\u5417\uff1f")) return;
+    setJobCanceling(jobId, true);
+    showBanner("\u6b63\u5728\u53d6\u6d88\u6392\u961f\u4efb\u52a1\uff0c\u53ef\u80fd\u9700\u8981\u51e0\u79d2...", "info");
     try {
-      await guard(() => apiJson("DELETE", `/api/v1/jobs/${encodeURIComponent(jobId)}`));
-      await loadJobs();
-      showBanner("已取消排队任务", "info");
+      const payload = await guard(() => apiJson("DELETE", `/api/v1/jobs/${encodeURIComponent(jobId)}`));
+      const item = payload?.item || null;
+      if (item) {
+        state.jobs = state.jobs.map((job) => (job.id === jobId ? item : job));
+        state.jobsSummary = queueSummaryFromJobs(state.jobs);
+        renderCurrentJobs();
+      }
+      showBanner("\u5df2\u53d6\u6d88\u6392\u961f\u4efb\u52a1", "info");
+      loadJobs().catch(() => {});
     } catch (error) {
       showBanner(error.message || String(error), "error");
+    } finally {
+      setJobCanceling(jobId, false);
     }
   }
 

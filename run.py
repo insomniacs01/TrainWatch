@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train Watch server")
-    parser.add_argument("--config", default="config.yaml", help="Path to YAML config file")
+    parser.add_argument("--config", default="config.empty.yaml", help="Path to YAML config file")
     parser.add_argument("--host", default=None, help="Override listen host")
     parser.add_argument("--port", type=int, default=None, help="Override listen port")
     parser.add_argument("--reload", action="store_true", help="Enable auto reload")

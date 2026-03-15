@@ -82,15 +82,37 @@ export function createConnectionsController({
     showBanner(`已把 ${item.alias} 填入基础信息`, "info");
   }
 
+  function setConnectionRemoving(nodeId, removing) {
+    if (!nodeId) return;
+    if (state.removingConnectionIds instanceof Set) {
+      if (removing) {
+        state.removingConnectionIds.add(nodeId);
+      } else {
+        state.removingConnectionIds.delete(nodeId);
+      }
+    }
+    document.querySelectorAll('.disconnect-button[data-remove-node-id]').forEach((button) => {
+      if (button.dataset.removeNodeId !== nodeId) return;
+      button.disabled = removing;
+      button.textContent = removing ? "移除中..." : "移除连接";
+      button.closest('.node-card')?.classList.toggle('is-removing', removing);
+    });
+  }
+
   async function removeConnection(nodeId, label) {
     if (!nodeId) return;
+    if (state.removingConnectionIds instanceof Set && state.removingConnectionIds.has(nodeId)) return;
     if (!window.confirm(`确认移除 ${label || nodeId} 吗？`)) return;
+    setConnectionRemoving(nodeId, true);
+    showBanner(`正在移除 ${label || nodeId}，可能需要几秒...`, "info");
     try {
       await guard(() => apiJson("DELETE", `/api/v1/connections/${encodeURIComponent(nodeId)}`));
       showBanner(`已移除 ${label || nodeId}`, "info");
-      await refreshAll?.();
+      await onConnectionsChanged?.();
     } catch (error) {
       showBanner(error.message || String(error), "error");
+    } finally {
+      setConnectionRemoving(nodeId, false);
     }
   }
 
