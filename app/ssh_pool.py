@@ -123,13 +123,13 @@ class ParamikoConnectionPool:
                     text=True,
                     timeout=10,
                 )
-            except Exception:
+            except (subprocess.SubprocessError, OSError):
                 pass
         try:
             control_path.unlink()
         except FileNotFoundError:
             pass
-        except Exception:
+        except OSError:
             logger.debug("Failed to remove SSH control socket %s", control_path, exc_info=True)
 
     def _execute_system_ssh(self, node: NodeConfig, command: str, timeout: int) -> Tuple[str, str, int]:
@@ -176,7 +176,7 @@ class ParamikoConnectionPool:
                 error = stderr.read().decode("utf-8", "replace")
                 code = stdout.channel.recv_exit_status()
                 return output, error, code
-            except Exception as exc:
+            except (paramiko.SSHException, OSError, EOFError) as exc:
                 last_error = exc
                 self.close_node(node)
         raise RuntimeError(str(last_error) if last_error else "SSH execution failed")

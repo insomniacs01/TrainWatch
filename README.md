@@ -63,7 +63,7 @@ docker compose down
 
 ## Connect a Real Machine
 
-After startup, click `连接 SSH` in the top-right corner.
+After startup, click `Connect SSH` in the top-right corner.
 
 Common connection methods:
 

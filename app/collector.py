@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import AppConfig, NodeConfig, RunConfig
@@ -11,10 +10,7 @@ from .parsers import parse_training_output
 from .remote_probe import build_remote_probe_command
 from .run_activity import command_signature, derive_run_activity
 from .ssh_pool import ParamikoConnectionPool
-
-
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+from .time_utils import utc_now_iso
 
 
 logger = logging.getLogger(__name__)
@@ -88,7 +84,7 @@ class Collector:
                 raise RuntimeError(error.strip() or "Remote command failed")
             raw = json.loads(output)
             return self._build_node_snapshot(node, raw)
-        except Exception as exc:
+        except (RuntimeError, ValueError, TypeError, KeyError, OSError) as exc:
             logger.warning("Node collection failed for %s (%s): %s", node.label, node.host, exc)
             return self._build_error_snapshot(node, str(exc))
 

@@ -39,7 +39,7 @@ class SSHConnectionInput(BaseModel):
 
 class QueueJobInput(BaseModel):
     node_id: str
-    owner: str = "匿名"
+    owner: str = "anonymous"
     label: Optional[str] = None
     command: str
     gpu_count: int = Field(default=1, ge=1)
@@ -129,7 +129,7 @@ def build_queue_job_from_input(
         id=f"job-{uuid4().hex[:10]}",
         node_id=node.id,
         node_label=node.label,
-        owner=(payload.owner or "匿名").strip() or "匿名",
+        owner=(payload.owner or "anonymous").strip() or "anonymous",
         label=label,
         command=command,
         gpu_count=max(1, int(payload.gpu_count)),
