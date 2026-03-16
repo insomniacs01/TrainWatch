@@ -2,10 +2,11 @@ import sqlite3
 from pathlib import Path
 
 from .storage_records import SQLiteRecordStoreMixin
+from .storage_runtime import SQLiteRuntimeStoreMixin
 from .storage_snapshots import SQLiteSnapshotStoreMixin
 
 
-class SQLiteStore(SQLiteSnapshotStoreMixin, SQLiteRecordStoreMixin):
+class SQLiteStore(SQLiteSnapshotStoreMixin, SQLiteRuntimeStoreMixin, SQLiteRecordStoreMixin):
     def __init__(self, path_value: str, retention_days: int) -> None:
         self.path = Path(path_value)
         self.path.parent.mkdir(parents=True, exist_ok=True)

@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.config import AppConfig, NodeConfig, ServerConfig
-from app.job_queue import select_free_gpu_indices
+from app.job_queue import build_remote_launch_command, select_free_gpu_indices
 from app.models import AppSnapshot, GPUInfo, GPUProcess, NodeSnapshot, QueueJob, RunSnapshot
 from app.runtime import TrainWatchRuntime
 
@@ -624,6 +624,24 @@ class QueueHeuristicTests(unittest.TestCase):
             runs=[],
         )
         self.assertEqual(select_free_gpu_indices(node), [3, 4])
+
+    def test_build_remote_launch_command_uses_external_template(self) -> None:
+        job = QueueJob(
+            id="job-1",
+            node_id="node-1",
+            node_label="GPU Box",
+            owner="alice",
+            label="SFT",
+            command="torchrun train.py --config conf.yaml",
+            gpu_count=2,
+            created_at="2026-03-12T00:00:00Z",
+            updated_at="2026-03-12T00:00:00Z",
+            workdir="/workspace/project",
+        )
+        command = build_remote_launch_command(job, [0, 1])
+        self.assertIn("TRAIN_WATCH_QUEUE_COMPLETED", command)
+        self.assertIn("TRAIN_WATCH_QUEUE_FAILED", command)
+        self.assertIn("command -v python3 || command -v python", command)
 
 
 if __name__ == "__main__":
