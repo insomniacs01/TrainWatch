@@ -8,6 +8,11 @@ from app.config import load_config
 
 
 class ConfigTests(unittest.TestCase):
+    def test_example_config_starts_with_no_nodes(self) -> None:
+        config = load_config("config.example.yaml")
+
+        self.assertEqual(config.nodes, [])
+
     def test_empty_shared_token_remains_optional(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_path = Path(tmp_dir) / "config.yaml"
