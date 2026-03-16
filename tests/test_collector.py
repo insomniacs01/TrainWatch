@@ -2,6 +2,7 @@ import asyncio
 import json
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.collector import Collector, ParamikoConnectionPool
@@ -277,6 +278,32 @@ class CollectorTests(unittest.TestCase):
 
         system_ssh.assert_not_called()
         ssh_client.assert_not_called()
+
+    def test_system_ssh_skips_connection_multiplexing_on_windows(self) -> None:
+        node = NodeConfig(
+            id="node-direct",
+            label="Direct Node",
+            host="gpu.example.com",
+            port=22,
+            user="ubuntu",
+            key_path="",
+            password="",
+            runs=[],
+        )
+        with patch("app.ssh_pool.os.name", "nt"):
+            pool = ParamikoConnectionPool()
+        with patch(
+            "app.ssh_pool.build_system_ssh_command",
+            return_value=["ssh", "gpu.example.com", "hostname"],
+        ) as builder:
+            with patch(
+                "app.ssh_pool.subprocess.run",
+                return_value=SimpleNamespace(stdout="", stderr="", returncode=0),
+            ):
+                pool._execute_system_ssh(node, "hostname", 15)
+
+        self.assertIsNone(pool._system_control_path(node))
+        self.assertIsNone(builder.call_args.kwargs["control_path"])
 
     def test_node_without_nvidia_smi_is_still_online_for_system_metrics(self) -> None:
         payload = {

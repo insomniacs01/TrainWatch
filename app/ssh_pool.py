@@ -3,7 +3,6 @@ import logging
 import os
 import shutil
 import subprocess
-import tempfile
 import threading
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -38,7 +37,7 @@ class ParamikoConnectionPool:
         self._host_key_policy = effective_server_config.ssh_host_key_policy
         self._known_hosts_path = Path(effective_server_config.ssh_known_hosts_path).expanduser()
         if os.name == "nt":
-            self._control_dir = Path(tempfile.gettempdir()) / "train-watch-ssh"
+            self._control_dir = None
         else:
             self._control_dir = Path("/tmp/train-watch-ssh")
 
@@ -85,7 +84,9 @@ class ParamikoConnectionPool:
             self._clients[key] = client
             return client
 
-    def _system_control_path(self, node: NodeConfig) -> Path:
+    def _system_control_path(self, node: NodeConfig) -> Optional[Path]:
+        if self._control_dir is None:
+            return None
         key = self._cache_key(node)
         digest = hashlib.sha1(("%s:%s:%s:%s" % (node.id, node.host, node.port, node.user)).encode("utf-8")).hexdigest()[
             :16
