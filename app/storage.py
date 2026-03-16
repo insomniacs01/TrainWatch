@@ -125,5 +125,11 @@ class SQLiteStore(SQLiteSnapshotStoreMixin, SQLiteRuntimeStoreMixin, SQLiteRecor
 
                 CREATE INDEX IF NOT EXISTS idx_audit_logs_time
                 ON audit_logs(at DESC);
+
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )

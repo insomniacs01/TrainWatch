@@ -70,10 +70,15 @@ export function createAuthController({
 
   function updateTokenButtonVisibility() {
     if (!els.tokenBtn) return;
+    updateModeBadge();
+    if (state.authConfig?.mode === "personal") {
+      els.tokenBtn.classList.remove("hidden");
+      els.tokenBtn.textContent = "开启团队";
+      return;
+    }
     const authRequired = Boolean(state.authConfig?.auth_required);
     els.tokenBtn.classList.toggle("hidden", !authRequired);
     if (!authRequired) return;
-    updateModeBadge();
     if (state.currentUser?.source === "session") {
       els.tokenBtn.textContent = `账户 · ${state.currentUser.display_name || state.currentUser.username}`;
       return;
@@ -200,6 +205,14 @@ export function createAuthController({
     return Boolean(state.token);
   }
 
+  async function enableTeamMode() {
+    const payload = await apiJson("POST", "/api/v1/auth/enable-team-mode", {});
+    state.authConfig = payload;
+    state.authMode = "password";
+    updateTokenButtonVisibility();
+    return payload;
+  }
+
   async function logoutCurrentSession() {
     if (!state.token) return;
     try {
@@ -324,6 +337,7 @@ export function createAuthController({
   }
 
   return {
+    enableTeamMode,
     enterApp,
     fetchAuthConfig,
     handleAuthSubmit,

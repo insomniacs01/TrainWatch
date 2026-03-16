@@ -167,6 +167,7 @@ const authController = createAuthController({
 });
 
 const {
+  enableTeamMode,
   enterApp,
   fetchAuthConfig,
   handleAuthSubmit,
@@ -504,6 +505,14 @@ async function bootstrap() {
   els.refreshBtn.addEventListener("click", () => refreshNow().catch((error) => showBanner(error.message || String(error), "error")));
   els.tokenBtn.addEventListener("click", async () => {
     try {
+      if (state.authConfig?.mode === "personal") {
+        const confirmed = window.confirm("开启团队模式后，需要创建管理员账号并通过账号密码进入。是否继续？");
+        if (!confirmed) return;
+        const payload = await enableTeamMode();
+        showBanner(payload.bootstrap_required ? "团队模式已启用，请先创建管理员账号。" : "团队模式已启用，请使用账号登录。", "info");
+        showAuthGate();
+        return;
+      }
       if ((state.currentUser?.source === "session" || state.token) && window.confirm("确定要退出当前登录状态并返回登录页吗？")) {
         await logoutCurrentSession();
       }

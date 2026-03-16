@@ -56,6 +56,7 @@ class TrainWatchRuntime(RuntimeConnectionsMixin, RuntimeQueueMixin):
         self.config.server = finalize_server_config(self.config.server)
         self.collector = collector or Collector(config)
         self.store = SQLiteStore(config.server.sqlite_path, config.server.retention_days)
+        self._restore_runtime_settings()
         self.auth = AuthManager(self.store, self.config.server)
         self.hub = WebSocketHub()
         self.snapshot = empty_snapshot()
@@ -69,6 +70,20 @@ class TrainWatchRuntime(RuntimeConnectionsMixin, RuntimeQueueMixin):
         self._stop_event: Optional[asyncio.Event] = None
         self._lock: Optional[asyncio.Lock] = None
         self._restore_launched_queue_runs()
+
+    def _restore_runtime_settings(self) -> None:
+        persisted_user_auth = self.store.get_setting("enable_user_auth")
+        if persisted_user_auth is None:
+            return
+        normalized = persisted_user_auth.strip().lower()
+        self.config.server.enable_user_auth = normalized in {"1", "true", "yes", "on"}
+
+    def enable_team_mode(self) -> bool:
+        if self.config.server.enable_user_auth:
+            return False
+        self.config.server.enable_user_auth = True
+        self.store.set_setting("enable_user_auth", "true")
+        return True
 
     def _ensure_async_state(self) -> Tuple[asyncio.Lock, asyncio.Event]:
         if self._lock is None:

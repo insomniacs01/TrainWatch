@@ -8,20 +8,7 @@ from .schemas import BootstrapAdminInput, LoginInput, UserUpsertInput
 router = APIRouter()
 
 
-@router.post("/api/v1/session/login")
-async def session_login(payload: LoginInput, runtime: TrainWatchRuntime = Depends(get_runtime)) -> dict:
-    if not runtime.auth.user_auth_enabled:
-        raise HTTPException(status_code=400, detail="Local user auth is not enabled")
-    try:
-        session = runtime.auth.login(payload.username, payload.password)
-    except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-    runtime.add_audit_log(payload.username, "session.login", "session", payload.username, "User logged in")
-    return session
-
-
-@router.get("/api/v1/auth/config")
-async def auth_config(runtime: TrainWatchRuntime = Depends(get_runtime)) -> dict:
+def _auth_config_payload(runtime: TrainWatchRuntime) -> dict:
     return {
         "auth_required": runtime.auth.auth_required,
         "user_auth_enabled": runtime.auth.user_auth_enabled,
@@ -37,6 +24,42 @@ async def auth_config(runtime: TrainWatchRuntime = Depends(get_runtime)) -> dict
             if enabled
         ],
     }
+
+
+@router.post("/api/v1/session/login")
+async def session_login(payload: LoginInput, runtime: TrainWatchRuntime = Depends(get_runtime)) -> dict:
+    if not runtime.auth.user_auth_enabled:
+        raise HTTPException(status_code=400, detail="Local user auth is not enabled")
+    try:
+        session = runtime.auth.login(payload.username, payload.password)
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    runtime.add_audit_log(payload.username, "session.login", "session", payload.username, "User logged in")
+    return session
+
+
+@router.get("/api/v1/auth/config")
+async def auth_config(runtime: TrainWatchRuntime = Depends(get_runtime)) -> dict:
+    return _auth_config_payload(runtime)
+
+
+@router.post("/api/v1/auth/enable-team-mode")
+async def enable_team_mode(request: Request, runtime: TrainWatchRuntime = Depends(get_runtime)) -> dict:
+    actor = "public"
+    if runtime.auth.auth_required and not runtime.auth.user_auth_enabled:
+        token = request_token(request)
+        try:
+            principal = runtime.auth.require_token(token)
+        except PermissionError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        actor = principal.username
+
+    changed = runtime.enable_team_mode()
+    if changed:
+        runtime.add_audit_log(actor, "auth.enable_team_mode", "server", "team-mode", "Enabled team mode")
+    payload = _auth_config_payload(runtime)
+    payload["changed"] = changed
+    return payload
 
 
 @router.post("/api/v1/session/bootstrap-admin")

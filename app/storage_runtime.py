@@ -5,6 +5,19 @@ from .time_utils import utc_now_iso
 
 
 class SQLiteRuntimeStoreMixin:
+    def get_setting(self, key: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT value FROM app_settings WHERE key = ?", (str(key or ""),)).fetchone()
+        return str(row["value"]) if row else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO app_settings(key, value, updated_at) VALUES (?, ?, ?)",
+                (str(key or ""), str(value or ""), utc_now_iso()),
+            )
+            connection.commit()
+
     def list_queue_jobs(self) -> List[Dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute("SELECT payload FROM queue_jobs ORDER BY created_at ASC, id ASC").fetchall()

@@ -64,6 +64,32 @@ def make_runtime(
 
 
 class ProductizationTests(unittest.TestCase):
+    def test_personal_mode_can_enable_team_mode_and_persist_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            runtime = make_runtime(tmp_dir, DummyCollector(), enable_user_auth=False, bootstrap_admin=False)
+            app = create_app(runtime)
+            with TestClient(app) as client:
+                enable = client.post("/api/v1/auth/enable-team-mode")
+                self.assertEqual(enable.status_code, 200)
+                payload = enable.json()
+                self.assertTrue(payload["changed"])
+                self.assertTrue(payload["auth_required"])
+                self.assertTrue(payload["user_auth_enabled"])
+                self.assertTrue(payload["bootstrap_required"])
+                self.assertEqual(payload["mode"], "team")
+
+                bootstrap = client.post(
+                    "/api/v1/session/bootstrap-admin",
+                    json={"username": "admin", "password": "secret-pass", "display_name": "Admin"},
+                )
+
+            self.assertEqual(bootstrap.status_code, 200)
+            self.assertEqual(bootstrap.json()["user"]["username"], "admin")
+
+            restored_runtime = make_runtime(tmp_dir, DummyCollector(), enable_user_auth=False, bootstrap_admin=False)
+            self.assertTrue(restored_runtime.auth.user_auth_enabled)
+            self.assertEqual(restored_runtime.auth.mode, "team")
+
     def test_personal_mode_stays_public_even_if_user_rows_exist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             runtime = make_runtime(tmp_dir, DummyCollector(), enable_user_auth=False, bootstrap_admin=False)

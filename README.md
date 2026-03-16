@@ -137,6 +137,8 @@ Train Watch now has three clear access modes.
 - `personal-token`: page asks only for one access token
 - `team`: page shows account login; if no user exists yet, the first screen becomes `Create Admin`
 
+In personal mode, the top-right `Enable Team` button can switch the current deployment into team mode directly from the page. The change is persisted locally, and the next step is to create the first admin account.
+
 Recommended behavior:
 
 - for a private personal deployment, keep `shared_token` empty and `enable_user_auth: false`
