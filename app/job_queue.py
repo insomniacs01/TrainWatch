@@ -1,6 +1,8 @@
 import base64
 import json
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from .config import RunConfig
@@ -10,6 +12,8 @@ from .time_utils import utc_now_iso
 ACTIVE_QUEUE_STATUSES = {"queued", "starting", "running"}
 LAUNCHED_QUEUE_STATUSES = {"starting", "running"}
 TERMINAL_QUEUE_STATUSES = {"completed", "failed", "canceled"}
+ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+QUEUE_LAUNCH_TEMPLATE_PATH = ASSETS_DIR / "queue_launch.py.tmpl"
 
 
 def queue_job_from_dict(payload: Dict[str, Any]) -> QueueJob:
@@ -58,9 +62,7 @@ def build_run_config(job: QueueJob) -> RunConfig:
         process_match=process_match,
         parser=job.parser or "auto",
         stall_after_seconds=900,
-        completion_regex=(
-            r"(TRAIN_WATCH_QUEUE_COMPLETED|Training complete|Finished training|saving final checkpoint)"
-        ),
+        completion_regex=(r"(TRAIN_WATCH_QUEUE_COMPLETED|Training complete|Finished training|saving final checkpoint)"),
         error_regex=(
             r"(TRAIN_WATCH_QUEUE_FAILED|TRAIN_WATCH_QUEUE_EXIT_CODE=[1-9][0-9]*|Traceback|RuntimeError|"
             r"CUDA out of memory|NCCL error|AssertionError)"
@@ -112,6 +114,11 @@ def queue_summary(jobs: Sequence[QueueJob]) -> Dict[str, Any]:
     }
 
 
+@lru_cache(maxsize=1)
+def _queue_launch_script_template() -> str:
+    return QUEUE_LAUNCH_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+
 def build_remote_launch_command(job: QueueJob, gpu_indices: Sequence[int]) -> str:
     job_dir = f"~/.train-watch/jobs/{job.id}"
     payload = {
@@ -124,71 +131,7 @@ def build_remote_launch_command(job: QueueJob, gpu_indices: Sequence[int]) -> st
         "gpu_indices": [int(item) for item in gpu_indices],
     }
     encoded = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
-    script = r"""
-import base64
-import json
-import os
-import shlex
-import stat
-import subprocess
-import sys
-
-payload = json.loads(base64.b64decode("__PAYLOAD__").decode("utf-8"))
-job_id = str(payload["job_id"])
-job_dir = os.path.expanduser(str(payload["job_dir"]))
-log_path = os.path.join(job_dir, "train-watch.log")
-script_path = os.path.join(job_dir, "run.sh")
-workdir = os.path.expanduser(str(payload.get("workdir") or "").strip())
-command = str(payload.get("command") or "").strip()
-if not command:
-    raise SystemExit("command is required")
-gpu_indices = [str(int(item)) for item in list(payload.get("gpu_indices") or [])]
-gpu_csv = ",".join(gpu_indices)
-os.makedirs(job_dir, exist_ok=True)
-with open(os.path.join(job_dir, "metadata.json"), "w", encoding="utf-8") as handle:
-    json.dump(payload, handle, ensure_ascii=False, indent=2)
-lines = [
-    "#!/usr/bin/env bash",
-    "set -u",
-    f"export TRAIN_WATCH_JOB_ID={shlex.quote(job_id)}",
-    f"export TRAIN_WATCH_JOB_LABEL={shlex.quote(str(payload.get('label') or ''))}",
-    f"export TRAIN_WATCH_JOB_OWNER={shlex.quote(str(payload.get('owner') or ''))}",
-    f"export CUDA_VISIBLE_DEVICES={shlex.quote(gpu_csv)}",
-    f"echo {shlex.quote('[train-watch] job_id=' + job_id)}",
-    f"echo {shlex.quote('[train-watch] owner=' + str(payload.get('owner') or ''))}",
-    f"echo {shlex.quote('[train-watch] label=' + str(payload.get('label') or ''))}",
-    f"echo {shlex.quote('[train-watch] gpus=' + gpu_csv)}",
-    f"echo {shlex.quote('[train-watch] command=' + command)}",
-]
-if workdir:
-    lines.append(f"cd {shlex.quote(workdir)} || exit 98")
-lines.extend([
-    "bash -lc %s" % shlex.quote(command),
-    'status=$?',
-    'echo "[train-watch] exit_code=$status"',
-    'if [ "$status" -eq 0 ]; then',
-    '  echo "TRAIN_WATCH_QUEUE_COMPLETED"',
-    'else',
-    '  echo "TRAIN_WATCH_QUEUE_EXIT_CODE=$status"',
-    '  echo "TRAIN_WATCH_QUEUE_FAILED"',
-    'fi',
-    'exit "$status"',
-])
-with open(script_path, "w", encoding="utf-8") as handle:
-    handle.write("\n".join(lines) + "\n")
-os.chmod(script_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
-launch = "nohup bash %s >> %s 2>&1 < /dev/null & echo $!" % (shlex.quote(script_path), shlex.quote(log_path))
-proc = subprocess.run(launch, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-if proc.returncode != 0:
-    raise SystemExit(proc.stderr.strip() or "launch failed")
-pid_text = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
-pid_value = int(pid_text) if pid_text.isdigit() else None
-print(json.dumps({
-    "remote_pid": pid_value,
-    "script_path": script_path,
-    "log_path": log_path,
-}))
-""".replace("__PAYLOAD__", encoded)
+    script = _queue_launch_script_template().replace("__PAYLOAD__", encoded)
     return (
         """PYTHON_BIN=$(command -v python3 || command -v python)
 if [ -z \"$PYTHON_BIN\" ]; then

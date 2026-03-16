@@ -31,6 +31,14 @@ class RuntimeQueueMixin:
     def _persist_queue_job(self, job: QueueJob) -> None:
         self.store.upsert_queue_job(job.to_dict())
 
+    def _queued_positions(self) -> Dict[str, int]:
+        positions: Dict[str, int] = {}
+        grouped = self._queue_jobs_by_node(statuses={"queued"})
+        for group_items in grouped.values():
+            for index, job in enumerate(group_items, start=1):
+                positions[job.id] = index
+        return positions
+
     def _restore_launched_queue_runs(self) -> None:
         for job in self.queue_jobs:
             if job.status in LAUNCHED_QUEUE_STATUSES:
@@ -68,6 +76,12 @@ class RuntimeQueueMixin:
             return None
         return max(0, int((end - start).total_seconds()))
 
+    def _startup_age_seconds(self, job: QueueJob, generated_at: str) -> Optional[int]:
+        return self._seconds_since(job.started_at or job.updated_at, generated_at)
+
+    def _startup_timed_out(self, node_status: str, age_seconds: Optional[int]) -> bool:
+        return node_status != "offline" and age_seconds is not None and age_seconds >= QUEUE_START_TIMEOUT_SECONDS
+
     def _run_snapshot_for_job(self, snapshot: AppSnapshot, job: QueueJob) -> Optional[RunSnapshot]:
         if not job.run_id:
             return None
@@ -88,6 +102,105 @@ class RuntimeQueueMixin:
         for items in grouped.values():
             items.sort(key=lambda item: (item.created_at, item.id))
         return grouped
+
+    def _set_job_running_state(self, job: QueueJob, run_snapshot: RunSnapshot, generated_at: str) -> None:
+        job.status = "running"
+        job.run_status = run_snapshot.status
+        job.updated_at = generated_at
+        job.error = run_snapshot.error or ("Job log looks stalled" if run_snapshot.status == "stalled" else "")
+        self._persist_queue_job(job)
+
+    def _set_job_completed_state(self, job: QueueJob, generated_at: str) -> None:
+        job.status = "completed"
+        job.run_status = "completed"
+        job.finished_at = generated_at
+        job.updated_at = generated_at
+        job.error = ""
+        self._detach_job_run(job)
+        self._persist_queue_job(job)
+
+    def _set_job_failed_state(
+        self,
+        job: QueueJob,
+        generated_at: str,
+        error: str,
+        *,
+        run_status: Optional[str] = None,
+        detach_run: bool = True,
+    ) -> None:
+        job.status = "failed"
+        if run_status is not None:
+            job.run_status = run_status
+        job.finished_at = generated_at
+        job.updated_at = generated_at
+        job.error = error
+        if detach_run:
+            self._detach_job_run(job)
+        self._persist_queue_job(job)
+
+    def _reconcile_missing_run_snapshot(self, job: QueueJob, node_status: str, generated_at: str) -> bool:
+        age_seconds = self._startup_age_seconds(job, generated_at)
+        if not self._startup_timed_out(node_status, age_seconds):
+            return False
+        self._set_job_failed_state(
+            job,
+            generated_at,
+            "Queued job did not appear in monitoring within the startup timeout",
+            run_status="unknown",
+        )
+        logger.warning("Queued job startup timed out: id=%s node=%s", job.id, job.node_id)
+        return True
+
+    def _reconcile_unknown_run_snapshot(
+        self, job: QueueJob, node_status: str, run_snapshot: RunSnapshot, generated_at: str
+    ) -> bool:
+        age_seconds = self._startup_age_seconds(job, generated_at)
+        if not self._startup_timed_out(node_status, age_seconds):
+            job.error = run_snapshot.error or job.error
+            self._persist_queue_job(job)
+            return False
+        self._set_job_failed_state(
+            job,
+            generated_at,
+            run_snapshot.error or "Queued job became unreachable during startup",
+            run_status="unknown",
+        )
+        logger.warning("Queued job became unreachable during startup: id=%s node=%s", job.id, job.node_id)
+        return True
+
+    def _reconcile_observed_run_snapshot(
+        self,
+        job: QueueJob,
+        node_status: str,
+        run_snapshot: RunSnapshot,
+        generated_at: str,
+    ) -> None:
+        job.run_status = run_snapshot.status
+        job.updated_at = generated_at
+        if run_snapshot.status in {"running", "stalled"}:
+            self._set_job_running_state(job, run_snapshot, generated_at)
+            return
+        if run_snapshot.status == "completed":
+            self._set_job_completed_state(job, generated_at)
+            logger.info("Queued job completed: id=%s node=%s", job.id, job.node_id)
+            return
+        if run_snapshot.status == "failed":
+            self._set_job_failed_state(
+                job, generated_at, run_snapshot.error or "Queued job failed", run_status="failed"
+            )
+            logger.warning("Queued job failed: id=%s node=%s error=%s", job.id, job.node_id, job.error)
+            return
+        if run_snapshot.status == "idle":
+            self._set_job_failed_state(
+                job,
+                generated_at,
+                run_snapshot.error or "Queued job exited without a completion marker",
+                run_status="idle",
+            )
+            logger.warning("Queued job exited without completion marker: id=%s node=%s", job.id, job.node_id)
+            return
+        if run_snapshot.status == "unknown":
+            self._reconcile_unknown_run_snapshot(job, node_status, run_snapshot, generated_at)
 
     async def _launch_queue_job(
         self, job: QueueJob, node: NodeConfig, gpu_indices: List[int], launched_at: str
@@ -131,69 +244,10 @@ class RuntimeQueueMixin:
             if node_snapshot is None:
                 continue
             if run_snapshot is None:
-                age_seconds = self._seconds_since(job.started_at or job.updated_at, snapshot.generated_at)
-                if (
-                    node_snapshot.status != "offline"
-                    and age_seconds is not None
-                    and age_seconds >= QUEUE_START_TIMEOUT_SECONDS
-                ):
-                    job.status = "failed"
-                    job.run_status = "unknown"
-                    job.finished_at = snapshot.generated_at
-                    job.updated_at = snapshot.generated_at
-                    job.error = "Queued job did not appear in monitoring within the startup timeout"
-                    self._detach_job_run(job)
-                    self._persist_queue_job(job)
-                    logger.warning("Queued job startup timed out: id=%s node=%s", job.id, job.node_id)
+                self._reconcile_missing_run_snapshot(job, node_snapshot.status, snapshot.generated_at)
                 continue
 
-            job.run_status = run_snapshot.status
-            job.updated_at = snapshot.generated_at
-            if run_snapshot.status in {"running", "stalled"}:
-                job.status = "running"
-                job.error = run_snapshot.error or ("Job log looks stalled" if run_snapshot.status == "stalled" else "")
-                self._persist_queue_job(job)
-                continue
-            if run_snapshot.status == "completed":
-                job.status = "completed"
-                job.finished_at = snapshot.generated_at
-                job.error = ""
-                self._detach_job_run(job)
-                self._persist_queue_job(job)
-                logger.info("Queued job completed: id=%s node=%s", job.id, job.node_id)
-                continue
-            if run_snapshot.status == "failed":
-                job.status = "failed"
-                job.finished_at = snapshot.generated_at
-                job.error = run_snapshot.error or "Queued job failed"
-                self._detach_job_run(job)
-                self._persist_queue_job(job)
-                logger.warning("Queued job failed: id=%s node=%s error=%s", job.id, job.node_id, job.error)
-                continue
-            if run_snapshot.status == "idle":
-                job.status = "failed"
-                job.finished_at = snapshot.generated_at
-                job.error = run_snapshot.error or "Queued job exited without a completion marker"
-                self._detach_job_run(job)
-                self._persist_queue_job(job)
-                logger.warning("Queued job exited without completion marker: id=%s node=%s", job.id, job.node_id)
-                continue
-            if run_snapshot.status == "unknown":
-                age_seconds = self._seconds_since(job.started_at or job.updated_at, snapshot.generated_at)
-                if (
-                    node_snapshot.status != "offline"
-                    and age_seconds is not None
-                    and age_seconds >= QUEUE_START_TIMEOUT_SECONDS
-                ):
-                    job.status = "failed"
-                    job.finished_at = snapshot.generated_at
-                    job.error = run_snapshot.error or "Queued job became unreachable during startup"
-                    self._detach_job_run(job)
-                    self._persist_queue_job(job)
-                    logger.warning("Queued job became unreachable during startup: id=%s node=%s", job.id, job.node_id)
-                    continue
-                job.error = run_snapshot.error or job.error
-                self._persist_queue_job(job)
+            self._reconcile_observed_run_snapshot(job, node_snapshot.status, run_snapshot, snapshot.generated_at)
 
     async def _schedule_pending_queue_jobs(self, snapshot: AppSnapshot) -> None:
         if not hasattr(self.collector, "pool"):
@@ -215,12 +269,7 @@ class RuntimeQueueMixin:
                 try:
                     await self._launch_queue_job(job, node, allocated, snapshot.generated_at)
                 except (RuntimeError, ValueError, KeyError, OSError) as exc:
-                    job.status = "failed"
-                    job.run_status = "failed"
-                    job.finished_at = snapshot.generated_at
-                    job.updated_at = snapshot.generated_at
-                    job.error = str(exc)
-                    self._persist_queue_job(job)
+                    self._set_job_failed_state(job, snapshot.generated_at, str(exc), run_status="failed")
                     logger.warning("Queued job launch failed: id=%s node=%s error=%s", job.id, node.id, job.error)
                     break
                 free_gpu_indices = free_gpu_indices[job.gpu_count :]
@@ -251,12 +300,7 @@ class RuntimeQueueMixin:
                 job.owner,
                 job.gpu_count,
             )
-            queue_positions = {}
-            grouped = self._queue_jobs_by_node(statuses={"queued"})
-            for group_items in grouped.values():
-                for index, queued_job in enumerate(group_items, start=1):
-                    queue_positions[queued_job.id] = index
-            item = self._job_item(job, queue_positions)
+            item = self._job_item(job, self._queued_positions())
         asyncio.create_task(self.refresh_once())
         return item
 
@@ -297,11 +341,7 @@ class RuntimeQueueMixin:
         items = [job for job in self.queue_jobs if node_id is None or job.node_id == node_id]
         sort_order = {"running": 0, "starting": 1, "queued": 2, "failed": 3, "completed": 4, "canceled": 5}
         items = sorted(items, key=lambda job: (sort_order.get(job.status, 9), job.created_at, job.id))
-        queue_positions: Dict[str, int] = {}
-        grouped = self._queue_jobs_by_node(statuses={"queued"})
-        for group_items in grouped.values():
-            for index, job in enumerate(group_items, start=1):
-                queue_positions[job.id] = index
+        queue_positions = self._queued_positions()
         external_items = self._external_job_items(node_id=node_id)
         return {
             "summary": queue_summary(items),

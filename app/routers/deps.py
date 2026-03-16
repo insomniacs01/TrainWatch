@@ -105,10 +105,7 @@ def prometheus_metrics(snapshot: dict) -> str:
         node_id = str(node.get("id", "")).replace('"', "")
         label = str(node.get("label", node_id)).replace('"', "")
         status = str(node.get("status", "unknown"))
-        lines.append(
-            f'train_watch_node_status{{node_id="{node_id}",label="{label}"}} '
-            f"{status_value.get(status, -1)}"
-        )
+        lines.append(f'train_watch_node_status{{node_id="{node_id}",label="{label}"}} {status_value.get(status, -1)}')
         metrics = node.get("metrics", {}) or {}
         for metric_name, value in (
             ("cpu_usage_percent", metrics.get("cpu_usage_percent")),
