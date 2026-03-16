@@ -16,7 +16,6 @@ from .runtime_queue import RuntimeQueueMixin
 from .runtime_views import build_nodes_summary
 from .storage import SQLiteStore
 
-
 logger = logging.getLogger(__name__)
 
 

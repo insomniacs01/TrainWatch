@@ -6,7 +6,6 @@ from typing import Any, Dict
 
 from .config import NodeConfig
 
-
 BASE_DIR = Path(__file__).resolve().parent
 REMOTE_PROBE_TEMPLATE_PATH = BASE_DIR / "assets" / "remote_probe.py.tmpl"
 REMOTE_COMMAND_TEMPLATE = """PYTHON_BIN=$(command -v python3 || command -v python)

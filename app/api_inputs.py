@@ -11,7 +11,6 @@ from .job_queue import summarize_command, utc_now_iso
 from .models import QueueJob
 from .ssh_support import ssh_config_alias_exists
 
-
 VALID_PARSER_NAMES = {"auto", "mapanything", "generic_torch", "deepspeed"}
 
 
@@ -55,9 +54,7 @@ def _slugify(value: str) -> str:
 def _normalize_parser_name(value: str) -> str:
     normalized = str(value or "auto").strip().lower() or "auto"
     if normalized not in VALID_PARSER_NAMES:
-        raise InputValidationError(
-            "parser must be one of: %s" % ", ".join(sorted(VALID_PARSER_NAMES))
-        )
+        raise InputValidationError("parser must be one of: %s" % ", ".join(sorted(VALID_PARSER_NAMES)))
     return normalized
 
 
@@ -73,7 +70,8 @@ def build_node_from_input(payload: SSHConnectionInput) -> NodeConfig:
         raise InputValidationError("user is required unless host is a local SSH config alias")
     if host_is_alias and password:
         raise InputValidationError(
-            "password auth is not supported for local SSH config aliases; use key-based auth via ~/.ssh/config or enter host/user directly"
+            "password auth is not supported for local SSH config aliases; "
+            "use key-based auth via ~/.ssh/config or enter host/user directly"
         )
 
     label = (payload.label or host).strip() or host

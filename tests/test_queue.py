@@ -84,17 +84,21 @@ class LaunchingCollector:
     def _build_node(self, node, phase):
         running = phase == 2 and bool(node.runs)
         completed = phase >= 3 and bool(node.runs)
-        processes = [
-            GPUProcess(
-                pid=4321,
-                process_name="bash",
-                gpu_uuid="gpu-0",
-                gpu_index=0,
-                used_gpu_memory_mb=2048.0,
-                command=node.runs[0].process_match if node.runs else "",
-                elapsed_seconds=30,
-            )
-        ] if running else []
+        processes = (
+            [
+                GPUProcess(
+                    pid=4321,
+                    process_name="bash",
+                    gpu_uuid="gpu-0",
+                    gpu_index=0,
+                    used_gpu_memory_mb=2048.0,
+                    command=node.runs[0].process_match if node.runs else "",
+                    elapsed_seconds=30,
+                )
+            ]
+            if running
+            else []
+        )
         gpus = [
             GPUInfo(
                 index=0,
@@ -136,7 +140,9 @@ class LaunchingCollector:
                     log_age_seconds=1,
                     last_update_at=f"2026-03-12T00:00:0{phase}Z",
                     last_log_line="TRAIN_WATCH_QUEUE_COMPLETED" if completed else "step 10/100",
-                    matched_processes=[{"pid": 4321, "elapsed_seconds": 30, "command": run_cfg.process_match}] if running else [],
+                    matched_processes=[{"pid": 4321, "elapsed_seconds": 30, "command": run_cfg.process_match}]
+                    if running
+                    else [],
                     completion_matched=completed,
                     error_matched=False,
                 )

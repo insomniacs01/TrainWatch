@@ -8,7 +8,6 @@ from ..errors import InputValidationError
 from ..runtime import TrainWatchRuntime
 from .deps import get_runtime, input_error_to_http, payload_dict, require_operator, require_viewer
 
-
 router = APIRouter()
 
 

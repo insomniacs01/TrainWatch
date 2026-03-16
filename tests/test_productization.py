@@ -3,12 +3,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-from fastapi.testclient import TestClient
-
 from app.config import AppConfig, NodeConfig, ServerConfig
 from app.main import create_app
 from app.models import NodeSnapshot, RunSnapshot
 from app.runtime import TrainWatchRuntime, empty_snapshot
+from fastapi.testclient import TestClient
 
 
 class DummyCollector:

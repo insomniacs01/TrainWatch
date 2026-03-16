@@ -2,7 +2,6 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
-
 NUMBER = r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
 
 
@@ -105,7 +104,11 @@ def _collect_signal_lines(text: str) -> Dict[str, str]:
         if not last_eval and re.search(r"Test\s+Epoch|eval|validation", line, flags=re.IGNORECASE):
             last_eval = line
         is_eval_line = bool(re.search(r"Test\s+Epoch|eval|validation", line, flags=re.IGNORECASE))
-        if not last_train and not is_eval_line and re.search(r"Epoch:|step=|global_step|loss", line, flags=re.IGNORECASE):
+        if (
+            not last_train
+            and not is_eval_line
+            and re.search(r"Epoch:|step=|global_step|loss", line, flags=re.IGNORECASE)
+        ):
             last_train = line
         if last_train and last_eval:
             break
@@ -117,7 +120,11 @@ def parse_mapanything(text: str) -> ParsedTrainingState:
     train_line = signals["last_train"]
     eval_line = signals["last_eval"]
     state = ParsedTrainingState(parser="mapanything", last_log_line=signals["last_any"])
-    state.eta = re.search(r"eta:\s*([0-9:]+)", train_line, flags=re.IGNORECASE).group(1) if re.search(r"eta:\s*([0-9:]+)", train_line, flags=re.IGNORECASE) else ""
+    state.eta = (
+        re.search(r"eta:\s*([0-9:]+)", train_line, flags=re.IGNORECASE).group(1)
+        if re.search(r"eta:\s*([0-9:]+)", train_line, flags=re.IGNORECASE)
+        else ""
+    )
     state.eta_seconds = _parse_eta_seconds(state.eta)
     epoch_step = _extract_epoch_step(train_line)
     state.epoch = epoch_step["epoch"]
@@ -139,11 +146,17 @@ def parse_generic_torch(text: str) -> ParsedTrainingState:
     signals = _collect_signal_lines(text)
     line = signals["last_train"]
     state = ParsedTrainingState(parser="generic_torch", last_log_line=signals["last_any"])
-    state.eta = re.search(r"eta[:=\s]+([0-9:]+)", line, flags=re.IGNORECASE).group(1) if re.search(r"eta[:=\s]+([0-9:]+)", line, flags=re.IGNORECASE) else ""
+    state.eta = (
+        re.search(r"eta[:=\s]+([0-9:]+)", line, flags=re.IGNORECASE).group(1)
+        if re.search(r"eta[:=\s]+([0-9:]+)", line, flags=re.IGNORECASE)
+        else ""
+    )
     state.eta_seconds = _parse_eta_seconds(state.eta)
     state.epoch = _extract_int(r"epoch[:=\s\[]+(\d+)", line)
     state.step = _extract_int(r"(?:step|iter|global_step)[:=\s]+(\d+)", line) or _extract_epoch_step(line)["step"]
-    state.step_total = _extract_int(r"(?:step_total|total_steps|iters?)[:=\s]+(\d+)", line) or _extract_epoch_step(line)["step_total"]
+    state.step_total = (
+        _extract_int(r"(?:step_total|total_steps|iters?)[:=\s]+(\d+)", line) or _extract_epoch_step(line)["step_total"]
+    )
     metrics = _parse_common_metrics(line)
     state.loss = metrics["loss"]
     state.eval_loss = metrics["eval_loss"]

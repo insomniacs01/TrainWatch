@@ -6,10 +6,9 @@ from fastapi import HTTPException, Request, WebSocket
 from pydantic import BaseModel
 from starlette.websockets import WebSocketDisconnect
 
-from ..auth import AuthPrincipal, ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER
+from ..auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, AuthPrincipal
 from ..errors import InputValidationError
 from ..runtime import TrainWatchRuntime
-
 
 WEBSOCKET_AUTH_TIMEOUT_SECONDS = 10
 logger = logging.getLogger(__name__)
@@ -105,8 +104,10 @@ def prometheus_metrics(snapshot: dict) -> str:
     for node in nodes:
         node_id = str(node.get("id", "")).replace('"', "")
         label = str(node.get("label", node_id)).replace('"', "")
+        status = str(node.get("status", "unknown"))
         lines.append(
-            f'train_watch_node_status{{node_id="{node_id}",label="{label}"}} {status_value.get(str(node.get("status", "unknown")), -1)}'
+            f'train_watch_node_status{{node_id="{node_id}",label="{label}"}} '
+            f"{status_value.get(status, -1)}"
         )
         metrics = node.get("metrics", {}) or {}
         for metric_name, value in (

@@ -13,7 +13,6 @@ import paramiko
 from .config import NodeConfig, ServerConfig
 from .ssh_support import build_system_ssh_command, ssh_config_alias_exists
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -88,9 +87,9 @@ class ParamikoConnectionPool:
 
     def _system_control_path(self, node: NodeConfig) -> Path:
         key = self._cache_key(node)
-        digest = hashlib.sha1(
-            ("%s:%s:%s:%s" % (node.id, node.host, node.port, node.user)).encode("utf-8")
-        ).hexdigest()[:16]
+        digest = hashlib.sha1(("%s:%s:%s:%s" % (node.id, node.host, node.port, node.user)).encode("utf-8")).hexdigest()[
+            :16
+        ]
         path = self._control_dir / ("%s.sock" % digest)
         self._control_dir.mkdir(parents=True, exist_ok=True)
         with self._lock:
@@ -160,7 +159,8 @@ class ParamikoConnectionPool:
         host_is_alias = ssh_config_alias_exists(node.host)
         if host_is_alias and node.password:
             raise RuntimeError(
-                "Password auth is not supported for local SSH config aliases; use key-based auth via ~/.ssh/config or enter host/user directly"
+                "Password auth is not supported for local SSH config aliases; "
+                "use key-based auth via ~/.ssh/config or enter host/user directly"
             )
         if host_is_alias or not node.password:
             return self._execute_system_ssh(node, command, timeout)

@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-
 DEFAULT_KNOWN_HOSTS_PATH = Path("~/.ssh/known_hosts").expanduser()
 SSH_HOST_KEY_POLICIES = {"accept-new", "strict"}
 PARSER_NAMES = {"auto", "mapanything", "generic_torch", "deepspeed"}
@@ -76,9 +75,7 @@ class AppConfig:
 def _normalize_ssh_host_key_policy(value: str) -> str:
     normalized = str(value or "accept-new").strip().lower() or "accept-new"
     if normalized not in SSH_HOST_KEY_POLICIES:
-        raise ValueError(
-            "server.ssh_host_key_policy must be one of: %s" % ", ".join(sorted(SSH_HOST_KEY_POLICIES))
-        )
+        raise ValueError("server.ssh_host_key_policy must be one of: %s" % ", ".join(sorted(SSH_HOST_KEY_POLICIES)))
     return normalized
 
 
@@ -181,8 +178,12 @@ def run_from_persisted_dict(item: Dict[str, Any]) -> RunConfig:
         process_match=str(item.get("process_match", "")),
         parser=_normalize_parser_name(str(item.get("parser", "auto") or "auto")),
         stall_after_seconds=max(30, int(item.get("stall_after_seconds", 900))),
-        completion_regex=str(item.get("completion_regex", r"(Training complete|Finished training|saving final checkpoint)")),
-        error_regex=str(item.get("error_regex", r"(Traceback|RuntimeError|CUDA out of memory|NCCL error|AssertionError)")),
+        completion_regex=str(
+            item.get("completion_regex", r"(Training complete|Finished training|saving final checkpoint)")
+        ),
+        error_regex=str(
+            item.get("error_regex", r"(Traceback|RuntimeError|CUDA out of memory|NCCL error|AssertionError)")
+        ),
         mock_state=str(item.get("mock_state", "auto") or "auto"),
         mock_gpu_index=int(item["mock_gpu_index"]) if item.get("mock_gpu_index") is not None else None,
     )
@@ -263,7 +264,10 @@ def _load_node(config_dir: Path, item: Dict[str, Any]) -> NodeConfig:
         raise ValueError("nodes[].transport must be 'ssh' or 'mock'")
 
     allow_missing_log_source = transport == "mock"
-    runs = [_load_run(run_item or {}, allow_missing_log_source=allow_missing_log_source) for run_item in item.get("runs", [])]
+    runs = [
+        _load_run(run_item or {}, allow_missing_log_source=allow_missing_log_source)
+        for run_item in item.get("runs", [])
+    ]
 
     host = str(item.get("host", "")).strip() or ("mock.local" if transport == "mock" else "")
     if not host:
@@ -305,32 +309,34 @@ def load_config(path_value: str) -> AppConfig:
         raw = yaml.safe_load(handle) or {}
 
     server_raw = raw.get("server") or {}
-    server = finalize_server_config(ServerConfig(
-        host=str(server_raw.get("host", "127.0.0.1")),
-        port=int(server_raw.get("port", 8420)),
-        shared_token=str(server_raw.get("shared_token", "")),
-        enable_user_auth=_parse_bool(server_raw.get("enable_user_auth", False)),
-        bootstrap_admin_username=str(server_raw.get("bootstrap_admin_username", "")),
-        bootstrap_admin_password=str(server_raw.get("bootstrap_admin_password", "")),
-        session_ttl_hours=max(1, int(server_raw.get("session_ttl_hours", 24))),
-        poll_seconds=max(3, int(server_raw.get("poll_seconds", 10))),
-        sqlite_path=_resolve_path(
-            config_path.parent,
-            str(server_raw.get("sqlite_path", "data/train-watch.sqlite3")),
-        ),
-        retention_days=max(1, int(server_raw.get("retention_days", 7))),
-        persist_passwords=_parse_bool(server_raw.get("persist_passwords", False)),
-        log_level=str(server_raw.get("log_level", "INFO")),
-        ssh_host_key_policy=str(server_raw.get("ssh_host_key_policy", "accept-new")),
-        ssh_known_hosts_path=_resolve_path(
-            config_path.parent,
-            str(server_raw.get("ssh_known_hosts_path", DEFAULT_KNOWN_HOSTS_PATH)),
-        ),
-        cpu_alert_percent=float(server_raw.get("cpu_alert_percent", 95.0)),
-        memory_alert_percent=float(server_raw.get("memory_alert_percent", 95.0)),
-        disk_alert_percent=float(server_raw.get("disk_alert_percent", 95.0)),
-        gpu_temp_alert_c=float(server_raw.get("gpu_temp_alert_c", 85.0)),
-    ))
+    server = finalize_server_config(
+        ServerConfig(
+            host=str(server_raw.get("host", "127.0.0.1")),
+            port=int(server_raw.get("port", 8420)),
+            shared_token=str(server_raw.get("shared_token", "")),
+            enable_user_auth=_parse_bool(server_raw.get("enable_user_auth", False)),
+            bootstrap_admin_username=str(server_raw.get("bootstrap_admin_username", "")),
+            bootstrap_admin_password=str(server_raw.get("bootstrap_admin_password", "")),
+            session_ttl_hours=max(1, int(server_raw.get("session_ttl_hours", 24))),
+            poll_seconds=max(3, int(server_raw.get("poll_seconds", 10))),
+            sqlite_path=_resolve_path(
+                config_path.parent,
+                str(server_raw.get("sqlite_path", "data/train-watch.sqlite3")),
+            ),
+            retention_days=max(1, int(server_raw.get("retention_days", 7))),
+            persist_passwords=_parse_bool(server_raw.get("persist_passwords", False)),
+            log_level=str(server_raw.get("log_level", "INFO")),
+            ssh_host_key_policy=str(server_raw.get("ssh_host_key_policy", "accept-new")),
+            ssh_known_hosts_path=_resolve_path(
+                config_path.parent,
+                str(server_raw.get("ssh_known_hosts_path", DEFAULT_KNOWN_HOSTS_PATH)),
+            ),
+            cpu_alert_percent=float(server_raw.get("cpu_alert_percent", 95.0)),
+            memory_alert_percent=float(server_raw.get("memory_alert_percent", 95.0)),
+            disk_alert_percent=float(server_raw.get("disk_alert_percent", 95.0)),
+            gpu_temp_alert_c=float(server_raw.get("gpu_temp_alert_c", 85.0)),
+        )
+    )
 
     nodes_raw = raw.get("nodes") or []
     nodes = [_load_node(config_path.parent, item or {}) for item in nodes_raw]

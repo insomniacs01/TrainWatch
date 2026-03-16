@@ -3,7 +3,6 @@ from starlette.websockets import WebSocketDisconnect
 
 from .deps import authenticate_websocket
 
-
 router = APIRouter()
 
 
@@ -15,7 +14,9 @@ async def stream(websocket: WebSocket) -> None:
     if principal is None:
         return
     await runtime.hub.connect(websocket, already_accepted=True)
-    await websocket.send_json({"type": "snapshot", "snapshot": runtime.snapshot_dict(), "events": [], "user": principal.to_dict()})
+    await websocket.send_json(
+        {"type": "snapshot", "snapshot": runtime.snapshot_dict(), "events": [], "user": principal.to_dict()}
+    )
     try:
         while True:
             await websocket.receive_text()

@@ -17,7 +17,6 @@ from .models import AppSnapshot, QueueJob, RunSnapshot
 from .runtime_views import build_external_job_items, build_external_queue_summary
 from .time_utils import parse_utc_timestamp
 
-
 logger = logging.getLogger(__name__)
 QUEUE_START_TIMEOUT_SECONDS = 180
 
@@ -90,7 +89,9 @@ class RuntimeQueueMixin:
             items.sort(key=lambda item: (item.created_at, item.id))
         return grouped
 
-    async def _launch_queue_job(self, job: QueueJob, node: NodeConfig, gpu_indices: List[int], launched_at: str) -> None:
+    async def _launch_queue_job(
+        self, job: QueueJob, node: NodeConfig, gpu_indices: List[int], launched_at: str
+    ) -> None:
         if not hasattr(self.collector, "pool"):
             raise RuntimeError("Queue launching is unavailable in the current collector")
         command = build_remote_launch_command(job, gpu_indices)
@@ -131,7 +132,11 @@ class RuntimeQueueMixin:
                 continue
             if run_snapshot is None:
                 age_seconds = self._seconds_since(job.started_at or job.updated_at, snapshot.generated_at)
-                if node_snapshot.status != "offline" and age_seconds is not None and age_seconds >= QUEUE_START_TIMEOUT_SECONDS:
+                if (
+                    node_snapshot.status != "offline"
+                    and age_seconds is not None
+                    and age_seconds >= QUEUE_START_TIMEOUT_SECONDS
+                ):
                     job.status = "failed"
                     job.run_status = "unknown"
                     job.finished_at = snapshot.generated_at
@@ -175,7 +180,11 @@ class RuntimeQueueMixin:
                 continue
             if run_snapshot.status == "unknown":
                 age_seconds = self._seconds_since(job.started_at or job.updated_at, snapshot.generated_at)
-                if node_snapshot.status != "offline" and age_seconds is not None and age_seconds >= QUEUE_START_TIMEOUT_SECONDS:
+                if (
+                    node_snapshot.status != "offline"
+                    and age_seconds is not None
+                    and age_seconds >= QUEUE_START_TIMEOUT_SECONDS
+                ):
                     job.status = "failed"
                     job.finished_at = snapshot.generated_at
                     job.error = run_snapshot.error or "Queued job became unreachable during startup"

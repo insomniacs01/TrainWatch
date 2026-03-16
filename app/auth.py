@@ -9,7 +9,6 @@ from .config import ServerConfig
 from .storage import SQLiteStore
 from .time_utils import format_utc, parse_utc_timestamp, utc_now, utc_now_iso
 
-
 ROLE_VIEWER = "viewer"
 ROLE_OPERATOR = "operator"
 ROLE_ADMIN = "admin"
@@ -117,7 +116,9 @@ class AuthManager:
         if not actual_token:
             return None
         if self.server_config.shared_token and hmac.compare_digest(actual_token, self.server_config.shared_token):
-            return AuthPrincipal(username="shared-token", role=ROLE_ADMIN, source="shared_token", display_name="Shared Token")
+            return AuthPrincipal(
+                username="shared-token", role=ROLE_ADMIN, source="shared_token", display_name="Shared Token"
+            )
         session = self.store.get_session(actual_token)
         if not session:
             return None
@@ -249,7 +250,9 @@ class AuthManager:
         if not actual_token:
             return None
         if self.server_config.shared_token and hmac.compare_digest(actual_token, self.server_config.shared_token):
-            principal = AuthPrincipal(username="shared-token", role=ROLE_ADMIN, source="shared_token", display_name="Shared Token")
+            principal = AuthPrincipal(
+                username="shared-token", role=ROLE_ADMIN, source="shared_token", display_name="Shared Token"
+            )
             return {"token_source": "shared_token", "user": principal.to_dict()}
         session = self.store.get_session(actual_token)
         if not session:

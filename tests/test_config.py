@@ -12,7 +12,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_path = Path(tmp_dir) / "config.yaml"
             config_path.write_text(
-                "server:\n  host: 127.0.0.1\n  shared_token: \"\"\n  sqlite_path: data/test.sqlite3\nnodes: []\n",
+                'server:\n  host: 127.0.0.1\n  shared_token: ""\n  sqlite_path: data/test.sqlite3\nnodes: []\n',
                 encoding="utf-8",
             )
 
