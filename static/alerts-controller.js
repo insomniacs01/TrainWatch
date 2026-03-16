@@ -7,8 +7,33 @@ export function createAlertsController({
   localizeMessage,
   statusLabel,
 } = {}) {
+  function alertIdentity(item) {
+    if (!item) return "";
+    const stableId = String(item.id || item.dedupe_key || "").trim();
+    if (stableId) return stableId;
+    if (item.run_id) return `run:${item.kind || ""}:${item.node_id}:${item.run_id}:${item.status}`;
+    return `node:${item.kind || ""}:${item.node_id}:${item.status}:${item.message || ""}`;
+  }
+
+  function dedupeAlerts(items = []) {
+    const merged = [];
+    const seen = new Set();
+    items.forEach((item) => {
+      const key = alertIdentity(item);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      merged.push(item);
+    });
+    return merged;
+  }
+
+  function unreadAlertCount() {
+    return state.unreadAlertKeys instanceof Set ? state.unreadAlertKeys.size : Number(state.unreadAlerts || 0);
+  }
+
   function updateAlertBadge() {
-    const badgeCount = state.currentAlerts.length > 0 ? state.currentAlerts.length : state.unreadAlerts;
+    const currentCount = dedupeAlerts(state.currentAlerts).length;
+    const badgeCount = currentCount > 0 ? currentCount : unreadAlertCount();
     els.alertBadge.textContent = String(badgeCount);
     els.alertBadge.classList.toggle("hidden", badgeCount <= 0);
   }
@@ -77,26 +102,11 @@ export function createAlertsController({
       .slice(0, 20);
   }
 
-  function alertIdentity(item) {
-    if (!item) return "";
-    if (item.run_id) return `run:${item.node_id}:${item.run_id}:${item.status}`;
-    return `node:${item.node_id}:${item.status}`;
-  }
-
   function syncAlertFeed(snapshot, fallbackEvents = []) {
     const recentEvents = Array.isArray(snapshot?.recent_events) ? snapshot.recent_events : [];
-    state.recentEvents = recentEvents.length ? recentEvents : (fallbackEvents.length ? fallbackEvents.slice(0, 20) : []);
-    state.currentAlerts = buildCurrentAlerts(snapshot);
-
-    const merged = [];
-    const seen = new Set();
-    state.currentAlerts.concat(state.recentEvents).forEach((item) => {
-      const key = alertIdentity(item);
-      if (!key || seen.has(key)) return;
-      seen.add(key);
-      merged.push(item);
-    });
-    state.alertFeed = merged.slice(0, 20);
+    state.recentEvents = dedupeAlerts(recentEvents.length ? recentEvents : (fallbackEvents.length ? fallbackEvents.slice(0, 20) : [])).slice(0, 20);
+    state.currentAlerts = dedupeAlerts(buildCurrentAlerts(snapshot)).slice(0, 20);
+    state.alertFeed = dedupeAlerts(state.currentAlerts.concat(state.recentEvents)).slice(0, 20);
   }
 
   function renderAlertFeed() {
@@ -109,12 +119,21 @@ export function createAlertsController({
       updateAlertBadge();
       return;
     }
-    const alerting = events.filter((event) => ["completed", "failed", "stalled"].includes(event.status));
+    const alerting = dedupeAlerts(events.filter((event) => ["completed", "failed", "stalled"].includes(event.status)));
     if (!alerting.length) {
       updateAlertBadge();
       return;
     }
-    state.unreadAlerts += alerting.length;
+    if (!(state.unreadAlertKeys instanceof Set)) {
+      state.unreadAlertKeys = new Set();
+    }
+    alerting.forEach((event) => {
+      const key = alertIdentity(event);
+      if (key) {
+        state.unreadAlertKeys.add(key);
+      }
+    });
+    state.unreadAlerts = state.unreadAlertKeys.size;
     updateAlertBadge();
     showBanner(alertMessage(alerting[0]), alerting[0].status === "completed" ? "info" : "error", { kind: "event" });
     playAlertTone();

@@ -1,4 +1,4 @@
-import { createAlertsController } from "./alerts-controller.js";
+import { createAlertsController } from "./alerts-controller.js?v=20260316-1";
 import { createApiClient } from "./api-client.js";
 import { createAuthController } from "./auth-controller.js";
 import { drawChart } from "./charts.js";
@@ -24,6 +24,26 @@ import {
   setupServiceWorker,
 } from "./ui-controllers.js";
 
+function readPageFromLocation() {
+  const rawHash = (window.location.hash || "").replace(/^#/, "");
+  if (!rawHash || rawHash === "home") {
+    return { type: "home" };
+  }
+  if (rawHash.startsWith("node/")) {
+    const nodeId = rawHash.slice(5);
+    return nodeId ? { type: "node", nodeId: decodeURIComponent(nodeId) } : { type: "home" };
+  }
+  return { type: "home" };
+}
+
+function pageHash(page) {
+  return page?.type === "node" && page?.nodeId ? `#node/${encodeURIComponent(page.nodeId)}` : "#home";
+}
+
+function samePage(left, right) {
+  return left?.type === right?.type && left?.nodeId === right?.nodeId;
+}
+
 const state = {
   snapshot: null,
   token: restoreToken(),
@@ -35,6 +55,7 @@ const state = {
   currentAlerts: [],
   alertFeed: [],
   unreadAlerts: 0,
+  unreadAlertKeys: new Set(),
   sshAliases: [],
   connections: [],
   jobs: [],
@@ -47,12 +68,17 @@ const state = {
   cancelingJobIds: new Set(),
   removingConnectionIds: new Set(),
   detailRequestId: 0,
+  requestedPage: readPageFromLocation(),
+  currentPage: { type: "home" },
+  pendingScrollTarget: null,
 };
 
 const els = {
   subtitle: document.getElementById("subtitle"),
+  pageNav: document.getElementById("pageNav"),
+  homePage: document.getElementById("homePage"),
+  devicePage: document.getElementById("devicePage"),
   summaryGrid: document.getElementById("summaryGrid"),
-  jumpSelect: document.getElementById("jumpSelect"),
   nodeList: document.getElementById("nodeList"),
   eventsList: document.getElementById("eventsList"),
   banner: document.getElementById("banner"),
@@ -124,9 +150,7 @@ let openRunDetail = async () => {};
 let openConnectDrawer = () => {};
 let closeConnectDrawer = () => {};
 let closeDetailDrawer = () => {};
-let renderJumpOptions = () => {};
 let jumpToTarget = () => {};
-let resetJumpSelection = () => {};
 
 const authController = createAuthController({
   state,
@@ -173,10 +197,7 @@ const {
   syncAlertFeed,
 } = alertsController;
 
-({ renderJumpOptions, jumpToTarget, resetJumpSelection } = createNavigationController({
-  jumpSelect: els.jumpSelect,
-  statusLabel,
-}));
+({ jumpToTarget } = createNavigationController({ statusLabel }));
 
 ({ openConnectDrawer, closeConnectDrawer, closeDetailDrawer } = createDrawerController({
   state,
@@ -234,7 +255,7 @@ stream = createSnapshotStream({
   onError: (message, meta) => {
     showBanner(message, "error");
     if (meta?.kind === "auth") {
-      showAuthGate(message || "Please sign in again.");
+      showAuthGate(message || "请重新登录。");
     }
   },
 });
@@ -250,23 +271,179 @@ stream = createSnapshotStream({
   syncOverlayState,
 }));
 
+function getNodeById(nodeId) {
+  return (state.snapshot?.nodes || []).find((item) => item.id === nodeId);
+}
+
+function resolveCurrentPage() {
+  const page = state.requestedPage;
+  if (page?.type === "node" && page.nodeId) {
+    const node = getNodeById(page.nodeId);
+    if (node) {
+      return { type: "node", nodeId: node.id };
+    }
+    if (state.snapshot) {
+      return { type: "home" };
+    }
+  }
+  return { type: "home" };
+}
+
+function buildPageNavButton({ label, meta, pageType, nodeId, active = false } = {}) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `page-nav-item${active ? " is-active" : ""}`;
+  button.dataset.pageType = pageType;
+  if (nodeId) {
+    button.dataset.nodeId = nodeId;
+  }
+  if (active) {
+    button.setAttribute("aria-current", "page");
+  }
+
+  const labelEl = document.createElement("span");
+  labelEl.className = "page-nav-label";
+  labelEl.textContent = label;
+
+  const metaEl = document.createElement("span");
+  metaEl.className = "page-nav-meta";
+  metaEl.textContent = meta;
+
+  button.append(labelEl, metaEl);
+  return button;
+}
+
+function buildPageNavGroup(title, children = []) {
+  const group = document.createElement("div");
+  group.className = "page-nav-group";
+
+  const titleEl = document.createElement("span");
+  titleEl.className = "page-nav-group-label";
+  titleEl.textContent = title;
+  group.appendChild(titleEl);
+
+  children.forEach((child) => {
+    group.appendChild(child);
+  });
+  return group;
+}
+
+function renderPageNav(snapshot = state.snapshot) {
+  if (!els.pageNav) return;
+
+  const activePage = state.currentPage?.type === "node" && getNodeById(state.currentPage.nodeId)
+    ? state.currentPage
+    : { type: "home" };
+  const nodes = snapshot?.nodes || [];
+  const fragment = document.createDocumentFragment();
+
+  fragment.appendChild(buildPageNavGroup("通用", [
+    buildPageNavButton({
+      label: "首页",
+      meta: "概览、告警和队列",
+      pageType: "home",
+      active: activePage.type === "home",
+    }),
+  ]));
+
+  const deviceChildren = [];
+  if (nodes.length) {
+    nodes.forEach((node) => {
+      const runs = Array.isArray(node.runs) ? node.runs.length : 0;
+      const gpus = Array.isArray(node.gpus) ? node.gpus.length : 0;
+      deviceChildren.push(buildPageNavButton({
+        label: node.label || node.host || node.id,
+        meta: statusLabel(node.status) + " · " + runs + " 个任务 · " + gpus + " 张 GPU",
+        pageType: "node",
+        nodeId: node.id,
+        active: activePage.type === "node" && activePage.nodeId === node.id,
+      }));
+    });
+  } else {
+    const empty = document.createElement("p");
+    empty.className = "page-nav-empty";
+    empty.textContent = "暂时还没有已连接设备。";
+    deviceChildren.push(empty);
+  }
+  fragment.appendChild(buildPageNavGroup("已连接设备", deviceChildren));
+
+  els.pageNav.replaceChildren(fragment);
+}
+
+function renderCurrentPage({ replaceInvalidHash = false } = {}) {
+  const resolvedPage = resolveCurrentPage();
+  const requestedPage = state.requestedPage;
+
+  if (replaceInvalidHash && state.snapshot && !samePage(requestedPage, resolvedPage)) {
+    history.replaceState(null, "", pageHash(resolvedPage));
+    state.requestedPage = resolvedPage;
+  }
+
+  state.currentPage = resolvedPage;
+  const isHomePage = resolvedPage.type === "home";
+  els.homePage?.classList.toggle("hidden", !isHomePage);
+  els.devicePage?.classList.toggle("hidden", isHomePage);
+
+  if (isHomePage) {
+    if (els.nodeList) {
+      els.nodeList.innerHTML = "";
+    }
+  } else {
+    const node = getNodeById(resolvedPage.nodeId);
+    if (node) {
+      renderNodesList({
+        nodeListEl: els.nodeList,
+        snapshot: { ...state.snapshot, nodes: [node] },
+        onOpenRunDetail: openRunDetail,
+        onRemoveConnection: removeConnection,
+        onOpenConnect: openConnectDrawer,
+        removingConnectionIds: state.removingConnectionIds,
+      });
+    }
+  }
+
+  applyFoldState(document);
+  renderPageNav();
+
+  if (state.pendingScrollTarget) {
+    const targetId = state.pendingScrollTarget;
+    state.pendingScrollTarget = null;
+    window.requestAnimationFrame(() => {
+      jumpToTarget(targetId);
+    });
+  }
+}
+
+function navigateToPage(page, { replace = false, scrollTarget = null } = {}) {
+  const requestedPage = page?.type === "node" && page?.nodeId
+    ? { type: "node", nodeId: page.nodeId }
+    : { type: "home" };
+
+  state.requestedPage = requestedPage;
+  state.pendingScrollTarget = scrollTarget;
+
+  const nextHash = pageHash(requestedPage);
+  if (replace) {
+    history.replaceState(null, "", nextHash);
+    renderCurrentPage({ replaceInvalidHash: false });
+    return;
+  }
+  if (window.location.hash !== nextHash) {
+    window.location.hash = nextHash;
+    return;
+  }
+  renderCurrentPage({ replaceInvalidHash: false });
+}
+
 function renderSnapshot(snapshot) {
   state.snapshot = snapshot;
   updateTokenButtonVisibility();
-  renderJumpOptions(snapshot);
   const userLabel = state.currentUser ? ` · ${state.currentUser.display_name || state.currentUser.username}` : "";
   els.subtitle.textContent = `最近刷新：${snapshot.generated_at}${userLabel}`;
   renderSummaryCards(els.summaryGrid, snapshot);
-  renderNodesList({
-    nodeListEl: els.nodeList,
-    snapshot,
-    onOpenRunDetail: openRunDetail,
-    onRemoveConnection: removeConnection,
-    onOpenConnect: openConnectDrawer,
-    removingConnectionIds: state.removingConnectionIds,
-  });
-  applyFoldState(document);
   renderAlertFeed();
+  renderCurrentPage({ replaceInvalidHash: true });
+  applyFoldState(document);
   if (!snapshot.nodes.length) {
     showBanner("还没有连接真实 SSH 机器，点击“连接 SSH”开始。", "info", { kind: "empty-state" });
   } else {
@@ -327,7 +504,7 @@ async function bootstrap() {
   els.refreshBtn.addEventListener("click", () => refreshNow().catch((error) => showBanner(error.message || String(error), "error")));
   els.tokenBtn.addEventListener("click", async () => {
     try {
-      if ((state.currentUser?.source === "session" || state.token) && window.confirm("Log out current access and return to sign-in?")) {
+      if ((state.currentUser?.source === "session" || state.token) && window.confirm("确定要退出当前登录状态并返回登录页吗？")) {
         await logoutCurrentSession();
       }
       await fetchAuthConfig().catch(() => {});
@@ -337,18 +514,30 @@ async function bootstrap() {
     }
   });
   els.alertsBtn.addEventListener("click", () => {
+    if (state.unreadAlertKeys instanceof Set) {
+      state.unreadAlertKeys.clear();
+    }
     state.unreadAlerts = 0;
     renderAlertFeed();
-    jumpToTarget("eventsPanel");
+    navigateToPage({ type: "home" }, { scrollTarget: "eventsPanel" });
     if (state.alertFeed.length) {
       showBanner(alertMessage(state.alertFeed[0]), state.alertFeed[0].status === "completed" ? "info" : "error", { kind: "event" });
     }
   });
-  els.jumpSelect?.addEventListener("change", () => {
-    const targetId = els.jumpSelect.value;
-    if (!targetId) return;
-    jumpToTarget(targetId);
-    resetJumpSelection();
+  els.pageNav?.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const trigger = target?.closest("[data-page-type]");
+    if (!(trigger instanceof HTMLElement)) return;
+    const pageType = trigger.dataset.pageType;
+    if (pageType === "node" && trigger.dataset.nodeId) {
+      navigateToPage({ type: "node", nodeId: trigger.dataset.nodeId });
+      return;
+    }
+    navigateToPage({ type: "home" });
+  });
+  window.addEventListener("hashchange", () => {
+    state.requestedPage = readPageFromLocation();
+    renderCurrentPage({ replaceInvalidHash: true });
   });
   els.closeDrawerBtn.addEventListener("click", closeDetailDrawer);
   els.detailDrawer.addEventListener("click", (event) => {
@@ -363,6 +552,8 @@ async function bootstrap() {
   await setupServiceWorker();
   await fetchAuthConfig();
   updateTokenButtonVisibility();
+  renderPageNav();
+  renderCurrentPage({ replaceInvalidHash: false });
   applyFoldState(document);
   if (requestedPanel === "connect") {
     openConnectDrawer();
