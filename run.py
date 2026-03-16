@@ -3,10 +3,8 @@ import logging
 import os
 
 import uvicorn
-
 from app.config import load_config
 from app.logging_utils import configure_logging
-
 
 logger = logging.getLogger(__name__)
 

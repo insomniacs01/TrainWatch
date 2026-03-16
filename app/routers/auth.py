@@ -5,7 +5,6 @@ from ..runtime import TrainWatchRuntime
 from .deps import get_runtime, request_token, require_admin, require_viewer
 from .schemas import BootstrapAdminInput, LoginInput, UserUpsertInput
 
-
 router = APIRouter()
 
 

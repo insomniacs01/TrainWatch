@@ -4,13 +4,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
-
 from app.config import AppConfig, NodeConfig, ServerConfig
 from app.main import create_app
 from app.models import AlertEvent, ExternalQueueItem, NodeSnapshot
 from app.runtime import TrainWatchRuntime, empty_snapshot
+from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 
 class DummyCollector:
@@ -411,14 +410,19 @@ class ApiTests(unittest.TestCase):
             )
             runtime = TrainWatchRuntime(config, collector=DummyCollector())
             app = create_app(runtime)
-            with patch("app.main.ssh_config_alias_records", return_value=[{
-                "alias": "gpu-lab-a",
-                "hostname": "gpu.example.com",
-                "user": "ubuntu",
-                "port": 10800,
-                "proxyjump": "",
-                "identityfile": "~/.ssh/id_ed25519",
-            }]):
+            with patch(
+                "app.main.ssh_config_alias_records",
+                return_value=[
+                    {
+                        "alias": "gpu-lab-a",
+                        "hostname": "gpu.example.com",
+                        "user": "ubuntu",
+                        "port": 10800,
+                        "proxyjump": "",
+                        "identityfile": "~/.ssh/id_ed25519",
+                    }
+                ],
+            ):
                 with TestClient(app) as client:
                     response = client.get("/api/v1/ssh-aliases", headers=self._auth_headers(runtime))
 

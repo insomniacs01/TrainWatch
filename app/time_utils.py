@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-
 UTC = timezone.utc
 UTC_ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 

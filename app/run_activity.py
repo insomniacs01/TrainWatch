@@ -118,10 +118,14 @@ def derive_progress_percent(parsed: Any) -> Optional[float]:
     return round(max(0.0, min(100.0, (parsed.step / parsed.step_total) * 100.0)), 1)
 
 
-def derive_run_activity(parsed: Any, matched_processes: List[Dict[str, Any]], collected_at: str, status: str) -> Dict[str, Any]:
+def derive_run_activity(
+    parsed: Any, matched_processes: List[Dict[str, Any]], collected_at: str, status: str
+) -> Dict[str, Any]:
     primary = select_primary_process(matched_processes)
     command = str(primary.get("command", "")).strip() if primary else ""
-    elapsed_seconds = int(primary.get("elapsed_seconds")) if primary and primary.get("elapsed_seconds") is not None else None
+    elapsed_seconds = (
+        int(primary.get("elapsed_seconds")) if primary and primary.get("elapsed_seconds") is not None else None
+    )
     collected_at_dt = parse_iso8601(collected_at)
     started_at = ""
     if collected_at_dt and elapsed_seconds is not None:

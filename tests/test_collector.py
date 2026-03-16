@@ -338,7 +338,13 @@ class CollectorTests(unittest.TestCase):
                     "log_age_seconds": 2,
                     "log_error": "",
                     "tail": "Epoch: [2]  [50/100]  lr: 0.000020  loss: 1.0000  grad_norm: 0.50",
-                    "matched_processes": [{"pid": 9999, "elapsed_seconds": 600, "command": "python /workspace/train.py --config conf.yaml"}],
+                    "matched_processes": [
+                        {
+                            "pid": 9999,
+                            "elapsed_seconds": 600,
+                            "command": "python /workspace/train.py --config conf.yaml",
+                        }
+                    ],
                 }
             ],
         }

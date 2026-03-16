@@ -84,8 +84,7 @@ def build_mock_raw(node: NodeConfig) -> Dict[str, Any]:
 
         if status in {"running", "stalled"}:
             command = (
-                f"python scripts/train.py output_dir=/mock/{run.id} parser={run.parser} "
-                f"experiment={run.id} --demo-mode"
+                f"python scripts/train.py output_dir=/mock/{run.id} parser={run.parser} experiment={run.id} --demo-mode"
             )
             matched_processes.append(
                 {
@@ -94,13 +93,15 @@ def build_mock_raw(node: NodeConfig) -> Dict[str, Any]:
                     "command": command,
                 }
             )
-            gpu_loads[gpu_index].append({
-                "pid": 21000 + run_index,
-                "command": command,
-                "process_name": "python",
-                "used_gpu_memory_mb": 8000 + run_index * 1200,
-                "status": status,
-            })
+            gpu_loads[gpu_index].append(
+                {
+                    "pid": 21000 + run_index,
+                    "command": command,
+                    "process_name": "python",
+                    "used_gpu_memory_mb": 8000 + run_index * 1200,
+                    "status": status,
+                }
+            )
         if status == "stalled":
             log_age_seconds = max(run.stall_after_seconds + 60, 1200)
             last_update_at = now - timedelta(seconds=log_age_seconds)
@@ -174,7 +175,11 @@ def build_mock_raw(node: NodeConfig) -> Dict[str, Any]:
     return {
         "hostname": f"{node.id}.mock.local",
         "collected_at": _iso(now),
-        "loadavg": [round(0.8 + busy_count * 0.9, 2), round(1.2 + busy_count * 0.7, 2), round(1.6 + busy_count * 0.5, 2)],
+        "loadavg": [
+            round(0.8 + busy_count * 0.9, 2),
+            round(1.2 + busy_count * 0.7, 2),
+            round(1.6 + busy_count * 0.5, 2),
+        ],
         "gpus": gpus,
         "gpu_processes": gpu_processes,
         "nvidia_smi": True,

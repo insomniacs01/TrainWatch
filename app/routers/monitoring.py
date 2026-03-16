@@ -10,7 +10,6 @@ from ..ssh_support import ssh_config_alias_records as load_ssh_alias_records
 from ..time_utils import coerce_utc_timestamp
 from .deps import get_runtime, prometheus_metrics, require_operator, require_viewer
 
-
 router = APIRouter()
 
 

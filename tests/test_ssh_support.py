@@ -22,7 +22,12 @@ class SSHSupportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_path = Path(tmp_dir) / "config"
             config_path.write_text(
-                "Host gpu-lab-a\n  HostName gpu.example.com\n  User ubuntu\n  Port 10800\n  ProxyJump bastion-a\n  IdentityFile ~/.ssh/id_ed25519\n",
+                "Host gpu-lab-a\n"
+                "  HostName gpu.example.com\n"
+                "  User ubuntu\n"
+                "  Port 10800\n"
+                "  ProxyJump bastion-a\n"
+                "  IdentityFile ~/.ssh/id_ed25519\n",
                 encoding="utf-8",
             )
             items = ssh_config_alias_records(config_path)

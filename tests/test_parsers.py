@@ -2,16 +2,17 @@ import unittest
 
 from app.parsers import parse_training_output
 
+MAPANYTHING_LOG = (
+    "Epoch: [4]  [123/500]  eta: 1:22:33  lr: 0.000050  loss: 0.4821 (0.6231) "
+    "grad_norm: 1.2300  time: 1.2312  data: 0.0111  max mem: 42321\n"
+    "Test Epoch: [4]  [203/204]  loss: 0.3910 (0.4011)  scale_err_mean: 0.0211\n"
+)
 
-MAPANYTHING_LOG = """
-Epoch: [4]  [123/500]  eta: 1:22:33  lr: 0.000050  loss: 0.4821 (0.6231)  grad_norm: 1.2300  time: 1.2312  data: 0.0111  max mem: 42321
-Test Epoch: [4]  [203/204]  loss: 0.3910 (0.4011)  scale_err_mean: 0.0211
-"""
 
-
-DEEPSPEED_LOG = """
-[2026-03-11 10:00:00,000] [INFO] [engine.py:123:train_batch] step=812 loss=1.9321 lr=1.20e-05 grad_norm=0.83 tokens/s=4321.8 samples/s=12.7 eta=0:12:10
-"""
+DEEPSPEED_LOG = (
+    "[2026-03-11 10:00:00,000] [INFO] [engine.py:123:train_batch] step=812 loss=1.9321 "
+    "lr=1.20e-05 grad_norm=0.83 tokens/s=4321.8 samples/s=12.7 eta=0:12:10\n"
+)
 
 
 class ParserTests(unittest.TestCase):

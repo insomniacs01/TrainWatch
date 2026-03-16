@@ -1,8 +1,7 @@
 from typing import Any, Dict, List, Optional
 
-from .collector import count_busy_gpus
+from .gpu_utils import count_busy_gpus
 from .models import AppSnapshot, NodeSnapshot
-
 
 _EXTERNAL_JOB_SORT_ORDER = {
     "queued": 0,
@@ -38,8 +37,12 @@ def build_nodes_summary(nodes: List[NodeSnapshot]) -> Dict[str, Any]:
         "external_queue_starting": sum(1 for item in external_items if item.status == "starting"),
         "external_queue_running": sum(1 for item in external_items if item.status == "running"),
         "cpu_usage_avg": float(sum(cpu_values) / len(cpu_values)) if cpu_values else 0.0,
-        "memory_used_percent_avg": float(sum(memory_percent_values) / len(memory_percent_values)) if memory_percent_values else 0.0,
-        "disk_used_percent_avg": float(sum(disk_percent_values) / len(disk_percent_values)) if disk_percent_values else 0.0,
+        "memory_used_percent_avg": float(sum(memory_percent_values) / len(memory_percent_values))
+        if memory_percent_values
+        else 0.0,
+        "disk_used_percent_avg": float(sum(disk_percent_values) / len(disk_percent_values))
+        if disk_percent_values
+        else 0.0,
         "memory_used_mb_total": float(sum(memory_used_values)) if memory_used_values else 0.0,
     }
 

@@ -1,21 +1,28 @@
-import { createApiClient } from "./api-client.js";
 import { createAlertsController } from "./alerts-controller.js";
+import { createApiClient } from "./api-client.js";
 import { createAuthController } from "./auth-controller.js";
-import { createConnectionsController } from "./connections-controller.js";
 import { drawChart } from "./charts.js";
+import { createConnectionsController } from "./connections-controller.js";
 import { applyFoldState } from "./fold-state.js";
-import { createJobsController } from "./jobs-controller.js";
-import { renderExternalJobsPanel, renderJobsPanel } from "./jobs-view.js";
-import { renderEventsList, renderNodesList, renderSummaryCards } from "./nodes-view.js";
-import { renderRunDetail } from "./run-detail-view.js";
-import { createSnapshotStream } from "./stream-client.js";
 import {
   aliasDescription,
   alertMessage,
   localizeMessage,
   statusLabel,
 } from "./formatters.js";
+import { createJobsController } from "./jobs-controller.js";
+import { renderExternalJobsPanel, renderJobsPanel } from "./jobs-view.js";
+import { renderEventsList, renderNodesList, renderSummaryCards } from "./nodes-view.js";
+import { renderRunDetail } from "./run-detail-view.js";
+import { createSnapshotStream } from "./stream-client.js";
 import { restoreToken } from "./token-store.js";
+import {
+  createBannerController,
+  createDrawerController,
+  createNavigationController,
+  createRunDetailController,
+  setupServiceWorker,
+} from "./ui-controllers.js";
 
 const state = {
   snapshot: null,
@@ -91,6 +98,7 @@ const els = {
   applyAliasBtn: document.getElementById("applyAliasBtn"),
   refreshAliasesBtn: document.getElementById("refreshAliasesBtn"),
   submitConnectBtn: document.getElementById("submitConnectBtn"),
+  hostInput: document.getElementById("hostInput"),
   jobForm: document.getElementById("jobForm"),
   jobNodeSelect: document.getElementById("jobNodeSelect"),
   submitJobBtn: document.getElementById("submitJobBtn"),
@@ -102,8 +110,23 @@ const els = {
 };
 
 const { apiGet, apiJson } = createApiClient(() => state.token);
+const { showBanner, clearBanner } = createBannerController({ bannerEl: els.banner });
 
 let stream = null;
+let loadConnections = async () => {};
+let loadJobs = async () => {};
+let loadSshAliases = async () => {};
+let submitConnection = async () => {};
+let submitJob = async () => {};
+let applySelectedAlias = () => {};
+let removeConnection = async () => {};
+let openRunDetail = async () => {};
+let openConnectDrawer = () => {};
+let closeConnectDrawer = () => {};
+let closeDetailDrawer = () => {};
+let renderJumpOptions = () => {};
+let jumpToTarget = () => {};
+let resetJumpSelection = () => {};
 
 const authController = createAuthController({
   state,
@@ -113,7 +136,7 @@ const authController = createAuthController({
   showBanner,
   localizeMessage,
   fetchSnapshot: () => fetchSnapshot(),
-  loadSshAliases: () => loadSshAliases(),
+  loadSshAliases: (...args) => loadSshAliases(...args),
   connectStream: () => stream?.connect(),
   disconnectStream: () => stream?.disconnect(),
   getOverlayElements: () => [els.detailDrawer],
@@ -150,105 +173,18 @@ const {
   syncAlertFeed,
 } = alertsController;
 
-stream = createSnapshotStream({
-  getToken: () => state.token,
-  onSnapshot: (payload) => {
-    syncAlertFeed(payload.snapshot, payload.events || []);
-    renderSnapshot(payload.snapshot);
-    handleIncomingEvents(payload.events || []);
-    loadConnections().catch(() => {});
-    loadJobs().catch(() => {});
-  },
-  onError: (message, meta) => {
-    showBanner(message, "error");
-    if (meta?.kind === "auth") {
-      showAuthGate(message || "Please sign in again.");
-    }
-  },
-});
+({ renderJumpOptions, jumpToTarget, resetJumpSelection } = createNavigationController({
+  jumpSelect: els.jumpSelect,
+  statusLabel,
+}));
 
-const DETAIL_CHARTS = [
-  { canvas: () => els.lossChart, color: "#38bdf8", label: "损失" },
-  { canvas: () => els.gpuChart, color: "#22c55e", label: "GPU 利用率" },
-  { canvas: () => els.memChart, color: "#f59e0b", label: "显存 MB" },
-  { canvas: () => els.tempChart, color: "#ef4444", label: "温度 °C" },
-];
-
-function showBanner(text, tone = "error", { kind = "general" } = {}) {
-  els.banner.textContent = text;
-  els.banner.dataset.kind = kind;
-  els.banner.classList.remove("hidden");
-  els.banner.style.borderColor = tone === "info" ? "rgba(56, 189, 248, 0.35)" : "rgba(239, 68, 68, 0.35)";
-  els.banner.style.background = tone === "info" ? "rgba(12, 74, 110, 0.35)" : "rgba(127, 29, 29, 0.35)";
-}
-function clearBanner(kind = null) {
-  if (kind && els.banner.dataset.kind !== kind) return;
-  els.banner.classList.add("hidden");
-  els.banner.dataset.kind = "";
-}
-
-function renderJumpOptions(snapshot) {
-  if (!els.jumpSelect) return;
-  const previousValue = els.jumpSelect.value;
-  const options = [
-    { value: "summaryGrid", label: "顶部概览" },
-    { value: "eventsPanel", label: "告警" },
-    { value: "jobsPanel", label: "GPU 队列" },
-  ];
-  (snapshot?.nodes || []).forEach((node) => {
-    const runs = Array.isArray(node.runs) ? node.runs.length : 0;
-    const gpus = Array.isArray(node.gpus) ? node.gpus.length : 0;
-    options.push({
-      value: `node-${node.id}`,
-      label: `${node.label} · ${statusLabel(node.status)} · ${runs} 个任务 · ${gpus} 张 GPU`,
-    });
-  });
-
-  const fragment = document.createDocumentFragment();
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent = "选择一个区域或节点";
-  fragment.appendChild(placeholder);
-
-  options.forEach((item) => {
-    const option = document.createElement("option");
-    option.value = item.value;
-    option.textContent = item.label;
-    fragment.appendChild(option);
-  });
-
-  els.jumpSelect.replaceChildren(fragment);
-  const nextValue = options.some((item) => item.value === previousValue) ? previousValue : "";
-  els.jumpSelect.value = nextValue;
-}
-
-function expandFoldAncestors(element) {
-  let current = element;
-  while (current) {
-    if (current.tagName === "DETAILS" && !current.open) {
-      current.open = true;
-    }
-    current = current.parentElement;
-  }
-}
-
-function jumpToTarget(targetId) {
-  const target = document.getElementById(targetId);
-  if (!target) return;
-  expandFoldAncestors(target);
-  target.scrollIntoView({ behavior: "smooth", block: "start" });
-  target.classList.add("jump-target-flash");
-  window.setTimeout(() => {
-    target.classList.remove("jump-target-flash");
-  }, 1400);
-}
-
-function resetJumpSelection() {
-  if (!els.jumpSelect) return;
-  window.requestAnimationFrame(() => {
-    els.jumpSelect.value = "";
-  });
-}
+({ openConnectDrawer, closeConnectDrawer, closeDetailDrawer } = createDrawerController({
+  state,
+  connectDrawerEl: els.connectDrawer,
+  detailDrawerEl: els.detailDrawer,
+  hostInputEl: els.hostInput,
+  syncOverlayState,
+}));
 
 const jobsController = createJobsController({
   state,
@@ -260,6 +196,8 @@ const jobsController = createJobsController({
   renderExternalJobsPanel,
   withAuthRecovery,
 });
+
+({ loadConnections, loadJobs, submitJob } = jobsController);
 
 const connectionsController = createConnectionsController({
   state,
@@ -277,19 +215,40 @@ const connectionsController = createConnectionsController({
   },
 });
 
-const {
-  cancelJob,
-  loadConnections,
-  loadJobs,
-  submitJob,
-} = jobsController;
-
-const {
+({
   applySelectedAlias,
   loadSshAliases,
   removeConnection,
   submitConnection,
-} = connectionsController;
+} = connectionsController);
+
+stream = createSnapshotStream({
+  getToken: () => state.token,
+  onSnapshot: (payload) => {
+    syncAlertFeed(payload.snapshot, payload.events || []);
+    renderSnapshot(payload.snapshot);
+    handleIncomingEvents(payload.events || []);
+    loadConnections().catch(() => {});
+    loadJobs().catch(() => {});
+  },
+  onError: (message, meta) => {
+    showBanner(message, "error");
+    if (meta?.kind === "auth") {
+      showAuthGate(message || "Please sign in again.");
+    }
+  },
+});
+
+({ openRunDetail } = createRunDetailController({
+  state,
+  els,
+  drawChart,
+  renderRunDetail,
+  apiGet,
+  showBanner,
+  withAuthRecovery,
+  syncOverlayState,
+}));
 
 function renderSnapshot(snapshot) {
   state.snapshot = snapshot;
@@ -327,7 +286,7 @@ function setRefreshing(refreshing) {
   state.refreshing = refreshing;
   if (els.refreshBtn) {
     els.refreshBtn.disabled = refreshing;
-    els.refreshBtn.textContent = refreshing ? "\u5237\u65b0\u4e2d..." : "\u7acb\u5373\u5237\u65b0";
+    els.refreshBtn.textContent = refreshing ? "刷新中..." : "立即刷新";
   }
 }
 
@@ -343,85 +302,6 @@ async function refreshNow() {
   } finally {
     setRefreshing(false);
   }
-}
-
-function resetDetailCharts() {
-  DETAIL_CHARTS.forEach(({ canvas, color, label }) => {
-    drawChart(canvas(), [], color, label);
-  });
-}
-
-async function openRunDetail(nodeId, runId) {
-  const node = (state.snapshot?.nodes || []).find((item) => item.id === nodeId);
-  const run = (node?.runs || []).find((item) => item.id === runId);
-  if (!node || !run) return;
-  const requestId = state.detailRequestId + 1;
-  state.detailRequestId = requestId;
-  renderRunDetail({
-    eyebrowEl: els.drawerEyebrow,
-    titleEl: els.drawerTitle,
-    metaEl: els.drawerMeta,
-    logEl: els.drawerLog,
-    processesEl: els.drawerProcesses,
-    drawerEl: els.detailDrawer,
-    node,
-    run,
-  });
-  syncOverlayState();
-  resetDetailCharts();
-
-  const end = new Date();
-  const start = new Date(end.getTime() - 6 * 3600 * 1000).toISOString();
-  try {
-    const queries = await withAuthRecovery(() => Promise.all([
-      apiGet(`/api/v1/history?node_id=${encodeURIComponent(nodeId)}&run_id=${encodeURIComponent(runId)}&metric=loss&from=${encodeURIComponent(start)}`),
-      apiGet(`/api/v1/history?node_id=${encodeURIComponent(nodeId)}&metric=gpu_utilization_avg&from=${encodeURIComponent(start)}`),
-      apiGet(`/api/v1/history?node_id=${encodeURIComponent(nodeId)}&metric=gpu_memory_used_mb_total&from=${encodeURIComponent(start)}`),
-      apiGet(`/api/v1/history?node_id=${encodeURIComponent(nodeId)}&metric=gpu_temperature_avg&from=${encodeURIComponent(start)}`),
-    ]));
-    if (requestId !== state.detailRequestId) return;
-    drawChart(els.lossChart, queries[0].points || [], "#38bdf8", "损失");
-    drawChart(els.gpuChart, queries[1].points || [], "#22c55e", "GPU 利用率");
-    drawChart(els.memChart, queries[2].points || [], "#f59e0b", "显存 MB");
-    drawChart(els.tempChart, queries[3].points || [], "#ef4444", "温度 °C");
-  } catch (error) {
-    if (requestId !== state.detailRequestId) return;
-    resetDetailCharts();
-    showBanner(error.message || String(error), "error");
-  }
-}
-
-function openConnectDrawer() {
-  els.connectDrawer.classList.remove("hidden");
-  els.connectDrawer.scrollIntoView({ behavior: "smooth", block: "start" });
-  window.setTimeout(() => els.hostInput?.focus(), 50);
-}
-function closeConnectDrawer() {
-  els.connectDrawer.classList.add("hidden");
-}
-function closeDetailDrawer() {
-  state.detailRequestId += 1;
-  els.detailDrawer.classList.add("hidden");
-  syncOverlayState();
-}
-
-async function setupServiceWorker() {
-  if (!("serviceWorker" in navigator)) return;
-  const isLocalHost = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
-  if (isLocalHost) {
-    try {
-      const registrations = await navigator.serviceWorker.getRegistrations();
-      await Promise.all(registrations.map((registration) => registration.unregister()));
-      if (window.caches?.keys) {
-        const keys = await window.caches.keys();
-        await Promise.all(keys.filter((key) => key.startsWith("train-watch-")).map((key) => window.caches.delete(key)));
-      }
-    } catch (_error) {
-      // ignore cleanup failures on localhost
-    }
-    return;
-  }
-  navigator.serviceWorker.register("/service-worker.js").catch(() => {});
 }
 
 async function bootstrap() {

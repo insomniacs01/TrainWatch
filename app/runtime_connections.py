@@ -9,7 +9,6 @@ from .models import AppSnapshot, NodeSnapshot, RunSnapshot
 from .runtime_views import build_nodes_summary
 from .time_utils import coerce_utc_timestamp
 
-
 logger = logging.getLogger(__name__)
 SSH_OFFLINE_FAILURE_THRESHOLD = 2
 IMMEDIATE_OFFLINE_ERROR_MARKERS = (
@@ -98,9 +97,9 @@ class RuntimeConnectionsMixin:
 
         preserved = deepcopy(previous_node)
         preserved.status = "degraded"
-        preserved.error = (
-            "SSH polling temporarily failed; 保留上次成功数据 (failure %s): %s"
-            % (failures, current_node.error or "Remote connection interrupted briefly")
+        preserved.error = "SSH polling temporarily failed; 保留上次成功数据 (failure %s): %s" % (
+            failures,
+            current_node.error or "Remote connection interrupted briefly",
         )
         return preserved
 
@@ -111,8 +110,7 @@ class RuntimeConnectionsMixin:
     ) -> AppSnapshot:
         previous_nodes = {node.id: node for node in previous_snapshot.nodes} if previous_snapshot else {}
         stabilized_nodes = [
-            self._stabilize_node_snapshot(node, previous_nodes.get(node.id))
-            for node in current_snapshot.nodes
+            self._stabilize_node_snapshot(node, previous_nodes.get(node.id)) for node in current_snapshot.nodes
         ]
         active_node_ids = {node.id for node in current_snapshot.nodes}
         stale_node_ids = [node_id for node_id in self._node_consecutive_ssh_failures if node_id not in active_node_ids]
@@ -141,7 +139,9 @@ class RuntimeConnectionsMixin:
             return
 
         current_nodes = {item.id: item for item in self.snapshot.nodes}
-        next_nodes = [current_nodes.get(node.id) or self._placeholder_snapshot_for_node(node) for node in self.config.nodes]
+        next_nodes = [
+            current_nodes.get(node.id) or self._placeholder_snapshot_for_node(node) for node in self.config.nodes
+        ]
         self.snapshot = AppSnapshot(
             generated_at=utc_now_iso(),
             summary=self._summary_for_nodes(next_nodes),
@@ -163,9 +163,7 @@ class RuntimeConnectionsMixin:
         return None
 
     def _persist_node(self, node: NodeConfig) -> None:
-        self.store.upsert_persisted_node(
-            node_to_dict(node, include_password=self.config.server.persist_passwords)
-        )
+        self.store.upsert_persisted_node(node_to_dict(node, include_password=self.config.server.persist_passwords))
         self._persisted_node_ids.add(node.id)
 
     def _restore_persisted_nodes(self) -> None:

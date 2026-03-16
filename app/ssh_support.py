@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Optional
 
 from .config import NodeConfig
 
-
 DEFAULT_SSH_CONFIG_PATH = Path("~/.ssh/config").expanduser()
 
 

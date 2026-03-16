@@ -11,7 +11,6 @@ from .routers import register_routers
 from .runtime import TrainWatchRuntime
 from .ssh_support import ssh_config_alias_records as ssh_config_alias_records
 
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 

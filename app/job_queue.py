@@ -7,10 +7,11 @@ from .config import RunConfig
 from .models import NodeSnapshot, QueueJob
 from .time_utils import utc_now_iso
 
-
 ACTIVE_QUEUE_STATUSES = {"queued", "starting", "running"}
 LAUNCHED_QUEUE_STATUSES = {"starting", "running"}
 TERMINAL_QUEUE_STATUSES = {"completed", "failed", "canceled"}
+
+
 def queue_job_from_dict(payload: Dict[str, Any]) -> QueueJob:
     return QueueJob(
         id=str(payload.get("id", "")).strip(),
@@ -57,8 +58,13 @@ def build_run_config(job: QueueJob) -> RunConfig:
         process_match=process_match,
         parser=job.parser or "auto",
         stall_after_seconds=900,
-        completion_regex=r"(TRAIN_WATCH_QUEUE_COMPLETED|Training complete|Finished training|saving final checkpoint)",
-        error_regex=r"(TRAIN_WATCH_QUEUE_FAILED|TRAIN_WATCH_QUEUE_EXIT_CODE=[1-9][0-9]*|Traceback|RuntimeError|CUDA out of memory|NCCL error|AssertionError)",
+        completion_regex=(
+            r"(TRAIN_WATCH_QUEUE_COMPLETED|Training complete|Finished training|saving final checkpoint)"
+        ),
+        error_regex=(
+            r"(TRAIN_WATCH_QUEUE_FAILED|TRAIN_WATCH_QUEUE_EXIT_CODE=[1-9][0-9]*|Traceback|RuntimeError|"
+            r"CUDA out of memory|NCCL error|AssertionError)"
+        ),
     )
 
 
@@ -118,7 +124,7 @@ def build_remote_launch_command(job: QueueJob, gpu_indices: Sequence[int]) -> st
         "gpu_indices": [int(item) for item in gpu_indices],
     }
     encoded = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
-    script = r'''
+    script = r"""
 import base64
 import json
 import os
@@ -182,12 +188,15 @@ print(json.dumps({
     "script_path": script_path,
     "log_path": log_path,
 }))
-'''.replace("__PAYLOAD__", encoded)
-    return """PYTHON_BIN=$(command -v python3 || command -v python)
+""".replace("__PAYLOAD__", encoded)
+    return (
+        """PYTHON_BIN=$(command -v python3 || command -v python)
 if [ -z \"$PYTHON_BIN\" ]; then
   echo \"python not found\" >&2
   exit 1
 fi
 \"$PYTHON_BIN\" - <<'PY'
 %s
-PY""" % script
+PY"""
+        % script
+    )
